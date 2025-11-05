@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use sysctl::{Ctl, CtlValue, Sysctl, SysctlError};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::containers::linux::{get_ip_addresses, run_in_namespace};
 use crate::containers::{self, Container, IpAddrType, NetworkService};
@@ -140,7 +140,7 @@ impl Container for LinuxProcess {
                     "The number of IP addresses in container are {}",
                     ip_addresses.len()
                 );
-                debug!("IP Addresses: {:?}", ip_addresses);
+                trace!("IP Addresses: {:?}", ip_addresses);
                 Ok(ip_addresses)
             },
         )
@@ -219,7 +219,7 @@ impl Container for LinuxProcess {
             }
 
             info!(pid = pid, "The number of registered services in container are {}", services.len());
-            debug!(pid = pid, "Services {:?}", services);
+            trace!(pid = pid, "Services {:?}", services);
 
             Ok(services)
         }).map_err(|e| containers::Error::Generic(e.to_string()))

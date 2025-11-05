@@ -30,7 +30,7 @@ use tokio::{
     task::LocalSet,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Level, debug, error, info, span, warn};
+use tracing::{Level, debug, error, info, instrument, span, warn};
 
 use crate::containers::{
     Container, Host, IpAddrType, NetworkService, TransportProtocol, linux::Linux,
@@ -151,6 +151,7 @@ pub struct ContainerAuthorityResponse {
     pub lookup_object: Box<dyn LookupObject>,
 }
 
+#[derive(Debug)]
 pub struct ContainerAuthority {
     zone_name: LowerName,
     request_tx: mpsc::Sender<ContainerAuthorityRequest>,
@@ -159,6 +160,10 @@ pub struct ContainerAuthority {
 impl ContainerAuthority {
     pub fn new() -> Result<(Self, mpsc::Receiver<ContainerAuthorityRequest>), Error> {
         let zone_name = ZoneRecordHandler::get_zone_name(ContainerAuthorityStore::host()?)?;
+        info!(
+            zone = zone_name.to_string(),
+            "Initializing the container authority"
+        );
 
         let (tx, rx) = mpsc::channel::<ContainerAuthorityRequest>(10);
 
@@ -248,12 +253,14 @@ impl AuthorityObject for ContainerAuthority {
         &self.zone_name
     }
 
+    #[instrument]
     async fn lookup(
         &self,
         name: &LowerName,
         rtype: RecordType,
         _lookup_options: LookupOptions,
     ) -> LookupControlFlow<Box<dyn LookupObject>> {
+        info!("lookup() called");
         match rtype {
             RecordType::A | RecordType::AAAA | RecordType::SRV | RecordType::NS => {
                 match self.send_request(name.clone(), rtype).await {
@@ -463,6 +470,7 @@ impl ContainerAuthorityStore {
                         }
                         Entry::Vacant(vacant_entry) => {
                             let mut handler = ContainerSrvRecordHandler::new(
+                                vec![cur_name.clone()],
                                 cur_service.clone(),
                                 self.config.clone(),
                                 vec![cur_proc.clone()],
@@ -511,11 +519,10 @@ impl ContainerAuthorityStore {
                     }
                     Entry::Vacant(vacant_entry) => {
                         let mut handler = ContainerARecordHandler::new(
+                            vec![cur_name.clone()],
                             self.config.clone(),
                             Some(IpAddrType::V4),
                             vec![cur_proc.clone()],
-                            containers.clone(),
-                            host_fqdn_hostname.clone(),
                         );
                         if let Err(e) = handler.update_records() {
                             warn!(
@@ -539,11 +546,10 @@ impl ContainerAuthorityStore {
                     }
                     Entry::Vacant(vacant_entry) => {
                         let mut handler = ContainerARecordHandler::new(
+                            vec![cur_name.clone()],
                             self.config.clone(),
                             Some(IpAddrType::V6),
                             vec![cur_proc.clone()],
-                            containers.clone(),
-                            host_fqdn_hostname.clone(),
                         );
                         if let Err(e) = handler.update_records() {
                             warn!(
@@ -589,6 +595,7 @@ trait ContainerRecordHandler {
 }
 
 struct ContainerSrvRecordHandler {
+    names: Vec<LowerName>,
     service: NetworkService,
     containers: Vec<Rc<dyn Container>>,
     all_containers: Vec<Rc<dyn Container>>,
@@ -599,6 +606,7 @@ struct ContainerSrvRecordHandler {
 
 impl ContainerSrvRecordHandler {
     pub(crate) fn new(
+        names: Vec<LowerName>,
         service: NetworkService,
         config: ContainerAuthorityConfig,
         containers: Vec<Rc<dyn Container>>,
@@ -606,6 +614,7 @@ impl ContainerSrvRecordHandler {
         host_fqdn_hostname: OsString,
     ) -> Self {
         Self {
+            names,
             service,
             containers,
             all_containers,
@@ -624,6 +633,7 @@ impl ContainerSrvRecordHandler {
         let mut containers = self.containers.clone();
         containers.shuffle(&mut rng());
         let mut records: Vec<Record> = vec![];
+        let mut indexed_names: Vec<LowerName> = vec![];
 
         for (priority, cur_proc) in (0_u16..).zip(self.containers.iter()) {
             let indexed_name = get_container_indexed_name(
@@ -631,10 +641,10 @@ impl ContainerSrvRecordHandler {
                 &self.all_containers,
                 &self.host_fqdn_hostname,
             )?;
+            indexed_names.push(indexed_name.clone());
+
             let srv = SRV::new(priority, 100, self.service.port, indexed_name.into());
-            for cur_name in
-                Self::get_service_names(&self.service, cur_proc.clone(), &self.host_fqdn_hostname)?
-            {
+            for cur_name in &self.names {
                 records.push(Record::from_rdata(
                     cur_name.into(),
                     self.config.record_ttls.srv.as_secs() as u32,
@@ -644,11 +654,10 @@ impl ContainerSrvRecordHandler {
         }
 
         let mut additionals_handler = ContainerARecordHandler::new(
+            indexed_names,
             self.config.clone(),
             None,
             self.containers.clone(),
-            self.all_containers.clone(),
-            self.host_fqdn_hostname.clone(),
         );
         if let Err(e) = additionals_handler.update_records() {
             error!(
@@ -752,29 +761,26 @@ impl ContainerRecordHandler for ContainerSrvRecordHandler {
 }
 
 struct ContainerARecordHandler {
+    names: Vec<LowerName>,
     addr_type: Option<IpAddrType>,
     containers: Vec<Rc<dyn Container>>,
-    all_containers: Vec<Rc<dyn Container>>,
-    host_fqdn_hostname: OsString,
     config: ContainerAuthorityConfig,
     records: Vec<Record>,
 }
 
 impl ContainerARecordHandler {
     fn new(
+        names: Vec<LowerName>,
         config: ContainerAuthorityConfig,
         addr_type: Option<IpAddrType>,
         containers: Vec<Rc<dyn Container>>,
-        all_containers: Vec<Rc<dyn Container>>,
-        host_fqdn_hostname: OsString,
     ) -> Self {
         Self {
+            names,
             addr_type,
             containers,
-            all_containers,
             config,
             records: vec![],
-            host_fqdn_hostname,
         }
     }
 
@@ -785,11 +791,6 @@ impl ContainerARecordHandler {
     fn gen_records(&self) -> Result<Vec<Record>, Error> {
         let mut records: Vec<Record> = vec![];
         for cur_proc in self.containers.iter() {
-            let cur_proc_names = Self::get_names(
-                cur_proc.clone(),
-                &self.all_containers,
-                &self.host_fqdn_hostname,
-            )?;
             for cur_ip in cur_proc.ip_addresses(self.addr_type)? {
                 if !address_in_allowed_networks(&self.config, &cur_ip) {
                     continue;
@@ -806,7 +807,7 @@ impl ContainerARecordHandler {
                     }
                 };
 
-                for cur_name in &cur_proc_names {
+                for cur_name in &self.names {
                     records.push(Record::from_rdata(
                         cur_name.clone().into(),
                         self.config.record_ttls.a.as_secs() as u32,

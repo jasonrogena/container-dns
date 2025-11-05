@@ -31,7 +31,7 @@ use nix::{
 use procfs::{ProcError, process::all_processes};
 use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
-use tracing::{debug, error, instrument, warn};
+use tracing::{debug, error, instrument, trace, warn};
 
 pub mod namespaces;
 pub mod process;
@@ -118,6 +118,7 @@ fn json_deserialize_child_process_data<T>(data: String) -> Result<T, ChildProces
 where
     T: for<'a> Deserialize<'a>,
 {
+    trace!("About to deserialize data: {}", data);
     match serde_json::from_str(&data) {
         Ok(ok) => ok,
         Err(e) => {
@@ -203,7 +204,6 @@ where
                 debug!("Detected a new TCP connection");
                 match s.read_to_string(&mut buf) {
                     Ok(_) => {
-                        debug!("TCP connection returned data: {}", buf);
                         return (json_deserialize_child_process_data(buf), false);
                     }
                     Err(e) => {
@@ -223,23 +223,6 @@ where
     }
 
     (Err(ChildProcessError::NoReturnThread()), false)
-}
-
-fn wait_for_child(child_pid: pid_t) {
-    debug!("Waiting for child process to exit {:?}", child_pid);
-    loop {
-        match waitpid(Pid::from_raw(child_pid), Some(WaitPidFlag::empty())) {
-            Ok(WaitStatus::Exited(..)) | Ok(WaitStatus::Signaled(..)) => {
-                debug!("Child PID {} has returned", child_pid);
-                break;
-            }
-            Err(e) => {
-                error!("Child process {} has errored with: {:?}", child_pid, e);
-                break;
-            }
-            _ => {}
-        }
-    }
 }
 
 fn read_child_process_data_tmp<T>(child_pid: pid_t) -> (Result<T, ChildProcessError>, bool)
@@ -287,6 +270,23 @@ where
     }
 
     result
+}
+
+fn wait_for_child(child_pid: pid_t) {
+    debug!("Waiting for child process to exit {:?}", child_pid);
+    loop {
+        match waitpid(Pid::from_raw(child_pid), Some(WaitPidFlag::empty())) {
+            Ok(WaitStatus::Exited(..)) | Ok(WaitStatus::Signaled(..)) => {
+                debug!("Child PID {} has returned", child_pid);
+                break;
+            }
+            Err(e) => {
+                error!("Child process {} has errored with: {:?}", child_pid, e);
+                break;
+            }
+            _ => {}
+        }
+    }
 }
 
 fn run_in_namespace<F, T, S>(
@@ -356,7 +356,7 @@ where
                 "About to run code inside namespace"
             );
             let closure_data = closure(input);
-            debug!(
+            trace!(
                 "Data from child process before sending to parent: {:?}",
                 closure_data
             );
@@ -441,7 +441,7 @@ impl Host for Linux {
     #[instrument]
     fn fqdn_hostname(&self) -> Result<OsString, containers::Error> {
         let hostname = gethostname().map_err(|e| containers::Error::Generic(e.to_string()))?;
-        Ok(format!("{}.rogena.lan", hostname.to_string_lossy()).into())
+        Ok(format!("{}.cybertron.lan.", hostname.to_string_lossy()).into())
     }
 
     #[instrument]

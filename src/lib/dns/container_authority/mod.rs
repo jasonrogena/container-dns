@@ -470,7 +470,7 @@ impl ContainerAuthorityStore {
                         }
                         Entry::Vacant(vacant_entry) => {
                             let mut handler = ContainerSrvRecordHandler::new(
-                                vec![cur_name.clone()],
+                                HashSet::from([cur_name.clone()]),
                                 cur_service.clone(),
                                 self.config.clone(),
                                 vec![cur_proc.clone()],
@@ -519,7 +519,7 @@ impl ContainerAuthorityStore {
                     }
                     Entry::Vacant(vacant_entry) => {
                         let mut handler = ContainerARecordHandler::new(
-                            vec![cur_name.clone()],
+                            HashSet::from([cur_name.clone()]),
                             self.config.clone(),
                             Some(IpAddrType::V4),
                             vec![cur_proc.clone()],
@@ -546,7 +546,7 @@ impl ContainerAuthorityStore {
                     }
                     Entry::Vacant(vacant_entry) => {
                         let mut handler = ContainerARecordHandler::new(
-                            vec![cur_name.clone()],
+                            HashSet::from([cur_name.clone()]),
                             self.config.clone(),
                             Some(IpAddrType::V6),
                             vec![cur_proc.clone()],
@@ -595,7 +595,7 @@ trait ContainerRecordHandler {
 }
 
 struct ContainerSrvRecordHandler {
-    names: Vec<LowerName>,
+    names: HashSet<LowerName>,
     service: NetworkService,
     containers: Vec<Rc<dyn Container>>,
     all_containers: Vec<Rc<dyn Container>>,
@@ -606,7 +606,7 @@ struct ContainerSrvRecordHandler {
 
 impl ContainerSrvRecordHandler {
     pub(crate) fn new(
-        names: Vec<LowerName>,
+        names: HashSet<LowerName>,
         service: NetworkService,
         config: ContainerAuthorityConfig,
         containers: Vec<Rc<dyn Container>>,
@@ -633,15 +633,15 @@ impl ContainerSrvRecordHandler {
         let mut containers = self.containers.clone();
         containers.shuffle(&mut rng());
         let mut records: Vec<Record> = vec![];
-        let mut indexed_names: Vec<LowerName> = vec![];
+        let mut indexed_names: HashSet<LowerName> = HashSet::new();
 
-        for (priority, cur_proc) in (0_u16..).zip(self.containers.iter()) {
+        for (priority, cur_proc) in (0_u16..).zip(containers.iter()) {
             let indexed_name = get_container_indexed_name(
                 cur_proc.clone(),
                 &self.all_containers,
                 &self.host_fqdn_hostname,
             )?;
-            indexed_names.push(indexed_name.clone());
+            indexed_names.insert(indexed_name.clone());
 
             let srv = SRV::new(priority, 100, self.service.port, indexed_name.into());
             for cur_name in &self.names {
@@ -761,7 +761,7 @@ impl ContainerRecordHandler for ContainerSrvRecordHandler {
 }
 
 struct ContainerARecordHandler {
-    names: Vec<LowerName>,
+    names: HashSet<LowerName>,
     addr_type: Option<IpAddrType>,
     containers: Vec<Rc<dyn Container>>,
     config: ContainerAuthorityConfig,
@@ -770,7 +770,7 @@ struct ContainerARecordHandler {
 
 impl ContainerARecordHandler {
     fn new(
-        names: Vec<LowerName>,
+        names: HashSet<LowerName>,
         config: ContainerAuthorityConfig,
         addr_type: Option<IpAddrType>,
         containers: Vec<Rc<dyn Container>>,
@@ -789,7 +789,8 @@ impl ContainerARecordHandler {
     }
 
     fn gen_records(&self) -> Result<Vec<Record>, Error> {
-        let mut records: Vec<Record> = vec![];
+        // Since Record doesn't implement the Hash trait, we can't use HashSet
+        let mut records: HashMap<(IpAddr, LowerName), Record> = HashMap::new();
         for cur_proc in self.containers.iter() {
             for cur_ip in cur_proc.ip_addresses(self.addr_type)? {
                 if !address_in_allowed_networks(&self.config, &cur_ip) {
@@ -808,16 +809,19 @@ impl ContainerARecordHandler {
                 };
 
                 for cur_name in &self.names {
-                    records.push(Record::from_rdata(
-                        cur_name.clone().into(),
-                        self.config.record_ttls.a.as_secs() as u32,
-                        rdata.clone(),
-                    ));
+                    records.insert(
+                        (cur_ip, cur_name.clone()),
+                        Record::from_rdata(
+                            cur_name.clone().into(),
+                            self.config.record_ttls.a.as_secs() as u32,
+                            rdata.clone(),
+                        ),
+                    );
                 }
             }
         }
 
-        Ok(records)
+        Ok(records.values().cloned().collect())
     }
 
     fn update_records(&mut self) -> Result<(), Error> {
@@ -924,7 +928,7 @@ impl ZoneRecordHandler {
     }
 
     fn get_ns_target_name(host: Rc<dyn Host>) -> Result<Name, Error> {
-        Ok(get_lower_hostname(host.fqdn_hostname()?)?.prepend_label("ns")?)
+        Ok(get_lower_hostname(host.fqdn_hostname()?)?.prepend_label("container-ns")?)
     }
 
     fn get_target_records(

@@ -388,7 +388,7 @@ impl Linux {
 
     fn get_namespaced_processes(
         &self,
-        namespace_types: Vec<namespaces::Type>,
+        namespace_types: HashSet<namespaces::Type>,
     ) -> Result<Vec<process::LinuxProcess>, Error> {
         let mut processes: HashMap<Vec<ino_t>, process::LinuxProcess> = HashMap::new();
 
@@ -448,11 +448,7 @@ impl Host for Linux {
     fn containers(&self) -> Result<Vec<Rc<dyn super::Container>>, containers::Error> {
         let mut arc_processes: Vec<Rc<dyn super::Container>> = vec![];
         for cur_process in self
-            .get_namespaced_processes(vec![
-                namespaces::Type::Net,
-                namespaces::Type::Uts,
-                namespaces::Type::Mount,
-            ])
+            .get_namespaced_processes(HashSet::from([namespaces::Type::Net])) // Get processes with unique network namespaces
             .map_err(|e| containers::Error::Generic(e.to_string()))?
         {
             arc_processes.push(Rc::new(cur_process));

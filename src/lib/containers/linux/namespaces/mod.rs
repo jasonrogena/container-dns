@@ -12,7 +12,7 @@ const NAMESPACE_TYPE_UTS: &str = "uts";
 const NAMESPACE_TYPE_MOUNT: &str = "mnt";
 const NAMESPACE_TYPE_PID: &str = "pid";
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Hash)]
 pub enum Type {
     Net,
     Uts,

@@ -1,31 +1,12 @@
-use std::{
-    collections::{HashMap, HashSet, hash_map::Entry},
-    env::consts,
-    rc::Rc,
-    time::{self},
-};
+use std::collections::{HashMap, hash_map::Entry};
 
 use hickory_proto::rr::{LowerName, RecordType};
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::LocalSet,
-};
+use hickory_server::authority::LookupObject;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tracing::{Level, debug, error, info, span, warn};
+use tracing::{error, info};
 
-use crate::{
-    containers::{Host, IpAddrType, linux::Linux},
-    dns::{
-        container::{
-            authority::{AuthorityRequest, AuthorityResponse},
-            record_handler::{
-                self, ARecordHandler, RecordHandler, RecordHandlerLookupObject, SrvRecordHandler,
-                ZoneRecordHandler,
-            },
-        },
-        settings::Settings,
-    },
-};
+use crate::dns::container::record_handler::{self, RecordHandlerLookupObject};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -42,318 +23,122 @@ pub enum Error {
     #[error("Could not find process with PID {0}")]
     ProcessNotFound(u32),
     #[error("Could not send a request to the authority store: {0}")]
-    RequestSendError(#[from] mpsc::error::SendError<AuthorityRequest>),
+    RequestSendError(#[from] mpsc::error::SendError<StoreRequest>),
     #[error("Could not receive a message expected from a different thread: {0}")]
     OneshotRecvError(#[from] oneshot::error::RecvError),
     #[error("An error was thrown by a record handler: {0}")]
     RecordHandler(#[from] record_handler::Error),
 }
 
-type RecordHandlers = HashMap<(RecordType, LowerName), Rc<dyn RecordHandler>>;
+pub enum StoreRequest {
+    QUERY(StoreQueryRequest),
+    UPDATE(StoreUpdateRequest),
+}
+
+pub struct StoreQueryRequest {
+    pub name: LowerName,
+    pub rtype: RecordType,
+    pub response_sender: oneshot::Sender<StoreResponse>,
+}
+
+pub struct StoreUpdateRequest {
+    pub lookup_objects: RecordHandlerLookupObjects,
+}
+
+pub enum StoreResponse {
+    ANSWER(StoreAnswerResponse),
+}
+
+pub struct StoreAnswerResponse {
+    pub lookup_object: Box<dyn LookupObject>,
+}
+
+pub type RecordHandlerLookupObjects = HashMap<(RecordType, LowerName), RecordHandlerLookupObject>;
 
 pub struct Store {
-    host: Rc<dyn Host>,
-    record_handlers: RecordHandlers,
-    config: Settings,
-    request_rx: mpsc::Receiver<AuthorityRequest>,
-    zone_name: LowerName,
+    lookup_objects: RecordHandlerLookupObjects,
+    request_rx: mpsc::Receiver<StoreRequest>,
+    shutdown_token: CancellationToken,
 }
 
 impl Store {
-    pub async fn start(
-        local_set: LocalSet,
-        config: Settings,
-        shutdown_token: CancellationToken,
-        rx: mpsc::Receiver<AuthorityRequest>,
-    ) {
-        let mut refresh_interval = tokio::time::interval(config.refresh_interval);
-        local_set.run_until(async move {
-            let mut store = match Store::new(config, rx) {
-                Ok(s) => s,
-                Err(e) => {
-                    error!(
-                        "An error was thrown while initializing the zone store: {:?}",
-                        e
-                    );
-                    return;
-                }
-            };
-
-            loop {
-                tokio::select! {
-                    _ = refresh_interval.tick() => {
-                        store.update_containers();
-                    },
-                    res = store.handle_next_request() => {
-                        if let Err(e) = res {
-                            error!("An error was thrown as the store attempted to handle a request: {:?}", e);
-                        }
-                    },
-                };
-                if shutdown_token.is_cancelled() {
-                    info!("Thread updating container authority terminated");
-                    return;
-                }
+    pub async fn start(&mut self) {
+        loop {
+            if let Err(e) = self.handle_next_request().await {
+                error!(
+                    "An error was thrown as the store attempted to handle a request: {:?}",
+                    e
+                );
             }
-        }).await;
+            if self.shutdown_token.is_cancelled() {
+                info!("Thread updating container authority terminated");
+                return;
+            }
+        }
     }
 
-    fn new(config: Settings, request_rx: mpsc::Receiver<AuthorityRequest>) -> Result<Self, Error> {
-        let host: Rc<dyn Host> = Self::host()?;
-        let zone_name = ZoneRecordHandler::get_zone_name(host.clone())?;
-        Ok(Self {
-            host,
-            record_handlers: HashMap::new(),
-            config,
+    pub fn new(
+        shutdown_token: CancellationToken,
+        request_rx: mpsc::Receiver<StoreRequest>,
+    ) -> Self {
+        Self {
+            lookup_objects: HashMap::new(),
             request_rx,
-            zone_name,
-        })
-    }
-
-    pub fn host() -> Result<Rc<dyn Host>, Error> {
-        let host: Rc<dyn Host> = match consts::OS {
-            "linux" => Rc::new(Linux::new()),
-            unsupported_os => return Err(Error::UnsupportedOs(unsupported_os.to_string())),
-        };
-
-        Ok(host)
+            shutdown_token,
+        }
     }
 
     async fn handle_next_request(&mut self) -> Result<(), Error> {
-        if let Some(request) = self.request_rx.recv().await {
-            let pair = (request.rtype, request.name);
-            let lookup_object = match self.record_handlers.get(&pair) {
-                Some(handler) => handler.lookup_object(),
-                None => Box::new(RecordHandlerLookupObject::default()),
-            };
+        match self.request_rx.recv().await {
+            Some(req) => match req {
+                StoreRequest::QUERY(query_req) => self.handle_query_request(query_req).await,
+                StoreRequest::UPDATE(update_req) => self.handle_update_request(update_req),
+            },
+            None => Ok(()),
+        }
+    }
 
-            if request
-                .response_sender
-                .send(AuthorityResponse { lookup_object })
-                .is_err()
-            {
-                error!(
-                    rtype = pair.0.to_string(),
-                    name = pair.1.to_string(),
-                    "Could not send back a response for request"
-                );
-            }
+    async fn handle_query_request(&self, request: StoreQueryRequest) -> Result<(), Error> {
+        let pair = (request.rtype, request.name);
+        let lookup_object: Box<dyn LookupObject> = match self.lookup_objects.get(&pair) {
+            Some(obj) => Box::new(obj.clone()),
+            None => Box::new(RecordHandlerLookupObject::default()),
+        };
+
+        if request
+            .response_sender
+            .send(StoreResponse::ANSWER(StoreAnswerResponse { lookup_object }))
+            .is_err()
+        {
+            error!(
+                rtype = pair.0.to_string(),
+                name = pair.1.to_string(),
+                "Could not send back a response for request"
+            );
         }
 
         Ok(())
     }
 
-    fn update_containers(&mut self) {
-        info!("update_containers() started");
-        let timing = time::Instant::now();
-        let mut record_handlers: HashMap<(RecordType, LowerName), Box<dyn RecordHandler>> =
-            HashMap::new();
-
-        let mut zone_record_handler = ZoneRecordHandler::new(
-            self.zone_name.clone(),
-            self.host.clone(),
-            false,
-            self.config.clone(),
-        );
-        if let Err(e) = zone_record_handler.update_records() {
-            warn!(
-                "An error was thrown while trying to get NS names for container. Defaulting to an empty list of names: {:?}",
-                e
-            );
-        }
-        record_handlers.insert(
-            (RecordType::NS, self.zone_name.clone()),
-            Box::new(zone_record_handler),
-        );
-
-        let containers = match self.host.containers() {
-            Ok(ok) => ok,
-            Err(e) => {
-                warn!(
-                    "Could not get the host's containers due to an error: {:?}",
-                    e
-                );
-                vec![]
-            }
-        };
-        info!("update_containers() gotten {} containers", containers.len());
-
-        let host_fqdn_hostname = match self.host.fqdn_hostname() {
-            Ok(name) => name,
-            Err(e) => {
-                warn!("An error was thrown trying to get the hostname: {:?}", e);
-                return;
-            }
-        };
-        for (container_index, cur_proc) in containers.iter().enumerate() {
-            let span = span!(
-                Level::INFO,
-                "get_container_records",
-                index = format!("{}/{}", container_index + 1, containers.len())
-            );
-            let _enter = span.enter();
-            let listening_services = match SrvRecordHandler::get_listening_services(
-                cur_proc.clone(),
-            ) {
-                Ok(ok) => ok,
-                Err(e) => {
-                    warn!(
-                        "An error was thrown while trying to get listening services for a container: {:?}",
-                        e
-                    );
-                    HashSet::new()
-                }
-            };
-            debug!(
-                "Current process has {} listening services",
-                listening_services.len()
-            );
-            for cur_service in listening_services {
-                let srv_names = match SrvRecordHandler::get_service_names(
-                    &cur_service,
-                    cur_proc.clone(),
-                    &host_fqdn_hostname,
-                ) {
-                    Ok(ok) => ok,
-                    Err(e) => {
-                        warn!(
-                            service = cur_service.to_string(),
-                            "An error was thrown while trying to get SVC names for container. Defaulting to an empty list of names: {:?}",
-                            e
-                        );
-                        HashSet::new()
-                    }
-                };
-                for cur_name in srv_names {
-                    match record_handlers.entry((RecordType::SRV, cur_name.clone())) {
-                        Entry::Occupied(mut occupied_entry) => {
-                            if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone())
-                            {
-                                warn!(
-                                    service = cur_service.to_string(),
-                                    service_name = cur_name.to_string(),
-                                    "An error was thrown while attempting to append SRV DNS names for container: {:?}",
-                                    e
-                                );
-                            }
-                        }
-                        Entry::Vacant(vacant_entry) => {
-                            let mut handler = SrvRecordHandler::new(
-                                HashSet::from([cur_name.clone()]),
-                                cur_service.clone(),
-                                self.config.clone(),
-                                vec![cur_proc.clone()],
-                                containers.clone(),
-                                host_fqdn_hostname.clone(),
-                            );
-                            if let Err(e) = handler.update_records() {
-                                warn!(
-                                    service = cur_service.to_string(),
-                                    service_name = cur_name.to_string(),
-                                    "An error was thrown while attempting to create SRV DNS names for container: {:?}",
-                                    e
-                                );
-                            }
-                            vacant_entry.insert(Box::new(handler));
-                        }
-                    }
-                }
-            }
-
-            let a_names = match ARecordHandler::get_names(
-                cur_proc.clone(),
-                &containers,
-                &host_fqdn_hostname,
-            ) {
-                Ok(ok) => ok,
-                Err(e) => {
-                    warn!(
-                        "An error was thrown while trying to get A names for container. Defaulting to an empty list of names: {:?}",
-                        e
-                    );
-                    HashSet::new()
-                }
-            };
-
-            for cur_name in a_names {
-                match record_handlers.entry((RecordType::A, cur_name.clone())) {
-                    Entry::Occupied(mut occupied_entry) => {
-                        if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone()) {
-                            warn!(
-                                a_name = cur_name.to_string(),
-                                "An error was thrown while attempting to add A DNS names for container: {:?}",
-                                e
-                            );
-                        }
-                    }
-                    Entry::Vacant(vacant_entry) => {
-                        let mut handler = ARecordHandler::new(
-                            HashSet::from([cur_name.clone()]),
-                            self.config.clone(),
-                            Some(IpAddrType::V4),
-                            vec![cur_proc.clone()],
-                        );
-                        if let Err(e) = handler.update_records() {
-                            warn!(
-                                a_name = cur_name.to_string(),
-                                "An error was thrown while attempting to add A DNS names for container: {:?}",
-                                e
-                            );
-                        }
-                        vacant_entry.insert(Box::new(handler));
-                    }
-                }
-                match record_handlers.entry((RecordType::AAAA, cur_name.clone())) {
-                    Entry::Occupied(mut occupied_entry) => {
-                        if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone()) {
-                            warn!(
-                                aaaa_name = cur_name.to_string(),
-                                "An error was thrown while attempting to add AAAA DNS names for container: {:?}",
-                                e
-                            );
-                        }
-                    }
-                    Entry::Vacant(vacant_entry) => {
-                        let mut handler = ARecordHandler::new(
-                            HashSet::from([cur_name.clone()]),
-                            self.config.clone(),
-                            Some(IpAddrType::V6),
-                            vec![cur_proc.clone()],
-                        );
-                        if let Err(e) = handler.update_records() {
-                            warn!(
-                                aaaa_name = cur_name.to_string(),
-                                "An error was thrown while attempting to add AAAA DNS names for container: {:?}",
-                                e
-                            );
-                        }
-                        vacant_entry.insert(Box::new(handler));
-                    }
-                }
-            }
-        }
-
-        self.record_handlers
-            .retain(|k, _| record_handlers.contains_key(k));
-        for (k, v) in record_handlers.drain() {
+    fn handle_update_request(&mut self, request: StoreUpdateRequest) -> Result<(), Error> {
+        self.lookup_objects
+            .retain(|k, _| request.lookup_objects.contains_key(k));
+        for (k, v) in request.lookup_objects {
             info!(
                 record_type = k.0.to_string(),
                 name = k.1.to_string(),
                 "Updating DNS record"
             );
-            match self.record_handlers.entry(k) {
+            match self.lookup_objects.entry(k) {
                 Entry::Occupied(mut occupied_entry) => {
-                    occupied_entry.insert(v.into());
+                    occupied_entry.insert(v);
                 }
                 Entry::Vacant(vacant_entry) => {
-                    vacant_entry.insert(v.into());
+                    vacant_entry.insert(v);
                 }
             }
         }
 
-        info!(
-            "Done updating DNS records in authority in {:?}",
-            timing.elapsed()
-        );
+        Ok(())
     }
 }

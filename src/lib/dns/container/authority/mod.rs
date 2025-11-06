@@ -13,14 +13,12 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, instrument};
 
 use crate::dns::container::{
-    record_handler::{self, ZoneRecordHandler},
-    store::{self, Store},
+    record_handler::{self},
+    store::{self, StoreQueryRequest, StoreRequest, StoreResponse},
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("The Operating System {0} is currently not supported")]
-    UnsupportedOs(String),
     #[error(
         "An error occurred while working with the system for identifying isoated processes: {0}"
     )]
@@ -32,7 +30,7 @@ pub enum Error {
     #[error("Could not find process with PID {0}")]
     ProcessNotFound(u32),
     #[error("Could not send a request to the authority store: {0}")]
-    RequestSendError(#[from] mpsc::error::SendError<AuthorityRequest>),
+    RequestSendError(#[from] mpsc::error::SendError<StoreRequest>),
     #[error("Could not receive a message expected from a different thread: {0}")]
     OneshotRecvError(#[from] oneshot::error::RecvError),
     #[error("Could not receive a message expected from a different thread: {0}")]
@@ -41,39 +39,23 @@ pub enum Error {
     RecordHandler(#[from] record_handler::Error),
 }
 
-pub struct AuthorityRequest {
-    pub name: LowerName,
-    pub rtype: RecordType,
-    pub response_sender: oneshot::Sender<AuthorityResponse>,
-}
-
-pub struct AuthorityResponse {
-    pub lookup_object: Box<dyn LookupObject>,
-}
-
 #[derive(Debug)]
 pub struct Authority {
     zone_name: LowerName,
-    request_tx: mpsc::Sender<AuthorityRequest>,
+    store_request_tx: mpsc::Sender<StoreRequest>,
 }
 
 impl Authority {
-    pub fn new() -> Result<(Self, mpsc::Receiver<AuthorityRequest>), Error> {
-        let zone_name = ZoneRecordHandler::get_zone_name(Store::host()?)?;
+    pub fn new(zone_name: LowerName, store_request_tx: mpsc::Sender<StoreRequest>) -> Self {
         info!(
             zone = zone_name.to_string(),
             "Initializing the container authority"
         );
 
-        let (tx, rx) = mpsc::channel::<AuthorityRequest>(10);
-
-        Ok((
-            Self {
-                zone_name,
-                request_tx: tx,
-            },
-            rx,
-        ))
+        Self {
+            zone_name,
+            store_request_tx,
+        }
     }
 
     async fn send_request(
@@ -82,14 +64,16 @@ impl Authority {
         rtype: RecordType,
     ) -> Result<Box<dyn LookupObject>, Error> {
         let (tx, rx) = oneshot::channel();
-        let request = AuthorityRequest {
+        let request = StoreRequest::QUERY(StoreQueryRequest {
             name,
             rtype,
             response_sender: tx,
-        };
-        self.request_tx.send(request).await?;
+        });
+        self.store_request_tx.send(request).await?;
 
-        Ok(rx.await?.lookup_object)
+        match rx.await? {
+            StoreResponse::ANSWER(ans) => Ok(ans.lookup_object),
+        }
     }
 }
 

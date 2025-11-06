@@ -99,7 +99,7 @@ fn address_in_allowed_networks(config: &Settings, ip_addr: &IpAddr) -> bool {
 
 pub trait RecordHandler {
     fn add_container(&mut self, container: Rc<dyn Container>) -> Result<(), Error>;
-    fn lookup_object(&self) -> Box<dyn LookupObject>;
+    fn lookup_object(&self) -> RecordHandlerLookupObject;
 }
 
 pub struct SrvRecordHandler {
@@ -263,8 +263,8 @@ impl RecordHandler for SrvRecordHandler {
         self.update_records()
     }
 
-    fn lookup_object(&self) -> Box<dyn LookupObject> {
-        Box::new(self.lookup_object.clone())
+    fn lookup_object(&self) -> RecordHandlerLookupObject {
+        self.lookup_object.clone()
     }
 }
 
@@ -368,8 +368,8 @@ impl RecordHandler for ARecordHandler {
         self.update_records()
     }
 
-    fn lookup_object(&self) -> Box<dyn LookupObject> {
-        Box::new(RecordHandlerLookupObject::new(self.records.clone(), None))
+    fn lookup_object(&self) -> RecordHandlerLookupObject {
+        RecordHandlerLookupObject::new(self.records.clone(), None)
     }
 }
 
@@ -482,8 +482,8 @@ impl RecordHandler for ZoneRecordHandler {
         Ok(())
     }
 
-    fn lookup_object(&self) -> Box<dyn LookupObject> {
-        Box::new(self.lookup_object.clone())
+    fn lookup_object(&self) -> RecordHandlerLookupObject {
+        self.lookup_object.clone()
     }
 }
 

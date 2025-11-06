@@ -3,8 +3,8 @@ use std::{
     time::Duration,
 };
 
-use container_dns::dns::container_authority::RecordTtls;
 use container_dns::dns::server::{Server, ServerConfig};
+use container_dns::dns::settings::RecordTtls;
 use ipnet::IpNet;
 use tokio::task::LocalSet;
 use tracing::Level;

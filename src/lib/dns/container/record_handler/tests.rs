@@ -156,7 +156,7 @@ fn test_srv_get_service_names() {
     let test_container = TestOkContainer::default();
     let network_services = test_container.network_services.clone();
     let test_service = network_services.iter().next().unwrap();
-    let service_names = ContainerSrvRecordHandler::get_service_names(
+    let service_names = SrvRecordHandler::get_service_names(
         test_service,
         Arc::new(test_container),
         Arc::new(test_host),

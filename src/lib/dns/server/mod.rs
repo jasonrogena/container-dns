@@ -12,8 +12,12 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
-use crate::dns::container_authority::{
-    self, ContainerAuthority, ContainerAuthorityConfig, RecordTtls,
+use crate::dns::{
+    container::{
+        authority::{self, Authority},
+        store::Store,
+    },
+    settings::{RecordTtls, Settings},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -23,7 +27,7 @@ pub enum Error {
     #[error("An IO error was thrown")]
     Io(#[from] std::io::Error),
     #[error("An error thrown by the container authority: {0}")]
-    ContainerAuthority(#[from] container_authority::Error),
+    Authority(#[from] authority::Error),
 }
 
 #[derive(Clone)]
@@ -47,7 +51,7 @@ impl Server {
 
         let mut catalog = Catalog::new();
 
-        let (container_authority, container_authority_rx) = ContainerAuthority::new()?;
+        let (container_authority, container_authority_rx) = Authority::new()?;
 
         catalog.upsert(
             container_authority.origin().clone(),
@@ -104,9 +108,9 @@ impl Server {
             }
         });
 
-        ContainerAuthority::start_store(
+        Store::start(
             local_set,
-            ContainerAuthorityConfig {
+            Settings {
                 record_ttls: config.record_ttls,
                 allowed_networks: config.allowed_networks.clone().into_iter().collect(),
                 refresh_interval: config.refresh_interval,

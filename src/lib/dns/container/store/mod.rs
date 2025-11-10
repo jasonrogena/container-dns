@@ -4,7 +4,7 @@ use hickory_proto::rr::{LowerName, RecordType};
 use hickory_server::authority::LookupObject;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::dns::container::record_handler::{self, RecordHandlerLookupObject};
 
@@ -124,7 +124,7 @@ impl Store {
         self.lookup_objects
             .retain(|k, _| request.lookup_objects.contains_key(k));
         for (k, v) in request.lookup_objects {
-            info!(
+            debug!(
                 record_type = k.0.to_string(),
                 name = k.1.to_string(),
                 "Updating DNS record"

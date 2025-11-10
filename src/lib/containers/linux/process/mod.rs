@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use sysctl::{Ctl, CtlValue, Sysctl, SysctlError};
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, error, instrument, trace, warn};
 
 use crate::containers::linux::{get_ip_addresses, run_in_namespace};
 use crate::containers::{self, Container, IpAddrType, NetworkService};
@@ -135,7 +135,7 @@ impl Container for LinuxProcess {
             |(pid, addr_type)| {
                 let ip_addresses = get_ip_addresses(addr_type)
                     .map_err(|e| containers::linux::ChildProcessError::Generic(e.to_string()))?;
-                info!(
+                debug!(
                     pid = pid,
                     "The number of IP addresses in container are {}",
                     ip_addresses.len()
@@ -185,7 +185,7 @@ impl Container for LinuxProcess {
                 }
             }
         }
-        info!(
+        debug!(
             pid = self.pid,
             "The number of listening TCP services in container are {}",
             sock_addr.len()
@@ -218,7 +218,7 @@ impl Container for LinuxProcess {
                 services.insert(NetworkService { name: cur_entry.name, aliases: cur_entry.aliases, port: cur_entry.port as u16, protocol: transport_protocol });
             }
 
-            info!(pid = pid, "The number of registered services in container are {}", services.len());
+            debug!(pid = pid, "The number of registered services in container are {}", services.len());
             trace!(pid = pid, "Services {:?}", services);
 
             Ok(services)

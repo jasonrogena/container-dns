@@ -1,7 +1,7 @@
 use std::{
     collections::HashSet,
     ffi::OsString,
-    fmt::Display,
+    fmt::{self, Display},
     net::{IpAddr, SocketAddr},
     rc::Rc,
 };
@@ -86,4 +86,10 @@ pub trait Host {
     fn fqdn_hostname(&self) -> Result<OsString, Error>;
     fn containers(&self) -> Result<Vec<Rc<dyn Container>>, Error>;
     fn ip_addresses(&self, addr_type: Option<IpAddrType>) -> Result<HashSet<IpAddr>, Error>;
+}
+
+impl fmt::Debug for dyn Host {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Host").finish()
+    }
 }

@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Duration};
 
 use ipnet::IpNet;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RecordTtls {
     pub(crate) srv: Duration,
     pub(crate) a: Duration,
@@ -19,7 +19,7 @@ impl Default for RecordTtls {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Settings {
     pub(crate) record_ttls: RecordTtls,
     pub(crate) allowed_networks: HashSet<IpNet>,

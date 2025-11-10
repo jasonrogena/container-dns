@@ -15,7 +15,7 @@ use tokio::{
     task::LocalSet,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{Level, debug, error, info, span, warn};
+use tracing::{Level, debug, error, info, instrument, span, warn};
 
 use crate::{
     containers::{Host, IpAddrType, linux::Linux},
@@ -183,11 +183,12 @@ impl Server {
         Ok(ZoneRecordHandler::get_zone_name(host.clone())?)
     }
 
+    #[instrument]
     fn get_updated_lookup_objects(
         host: Rc<dyn Host>,
         settings: Settings,
     ) -> Option<RecordHandlerLookupObjects> {
-        info!("update_container_records() started");
+        info!("Started container discovery");
         let zone_name = match Self::get_zone_name(host.clone()) {
             Ok(z) => z,
             Err(e) => {
@@ -223,7 +224,7 @@ impl Server {
                 vec![]
             }
         };
-        info!("update_containers() gotten {} containers", containers.len());
+        info!("Discovered {} containers", containers.len());
 
         let host_fqdn_hostname = match host.fqdn_hostname() {
             Ok(name) => name,
@@ -385,7 +386,7 @@ impl Server {
             .map(|(k, v)| (k, v.lookup_object()))
             .collect();
 
-        info!("update_container_records() done in {:?}", timing.elapsed());
+        info!("Finished in {:?}", timing.elapsed());
 
         Some(lookup_objects)
     }

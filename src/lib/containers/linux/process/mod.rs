@@ -117,6 +117,21 @@ impl Container for LinuxProcess {
         self.pid as u32
     }
 
+    fn load_average(&self) -> Option<f64> {
+        run_in_namespace(self.pid, super::namespaces::Type::Mount, (), |_: ()| {
+            let content = std::fs::read_to_string("/proc/loadavg")
+                .map_err(|e| super::ChildProcessError::Generic(e.to_string()))?;
+            let one_min = content
+                .split_whitespace()
+                .next()
+                .ok_or_else(|| super::ChildProcessError::Generic("empty /proc/loadavg".to_string()))?
+                .parse::<f64>()
+                .map_err(|e| super::ChildProcessError::Generic(e.to_string()))?;
+            Ok(one_min)
+        })
+        .ok()
+    }
+
     #[instrument]
     fn hostname(&self) -> Result<OsString, containers::Error> {
         Ok(self.hostname.clone())

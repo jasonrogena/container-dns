@@ -23,6 +23,7 @@ use crate::{
     dns::{
         container::{
             authority::{self, Authority},
+            load,
             record_handler::{
                 self, ARecordHandler, RecordHandler, SrvRecordHandler, ZoneRecordHandler,
             },
@@ -234,6 +235,7 @@ impl Server {
                 return None;
             }
         };
+        let load_map = load::priorities_and_weights(&containers);
         for (container_index, cur_proc) in containers.iter().enumerate() {
             let span = span!(
                 Level::INFO,
@@ -276,7 +278,8 @@ impl Server {
                 for cur_name in srv_names {
                     match record_handlers.entry((RecordType::SRV, cur_name.clone())) {
                         Entry::Occupied(mut occupied_entry) => {
-                            if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone())
+                            let (priority, weight) = load_map.get(&cur_proc.pid()).copied().unwrap_or((0, 100));
+                            if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone(), priority, weight)
                             {
                                 warn!(
                                     service = cur_service.to_string(),
@@ -294,6 +297,7 @@ impl Server {
                                 vec![cur_proc.clone()],
                                 containers.clone(),
                                 host_fqdn_hostname.clone(),
+                                load_map.clone(),
                             );
                             if let Err(e) = handler.update_records() {
                                 warn!(
@@ -327,7 +331,7 @@ impl Server {
             for cur_name in a_names {
                 match record_handlers.entry((RecordType::A, cur_name.clone())) {
                     Entry::Occupied(mut occupied_entry) => {
-                        if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone()) {
+                        if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone(), 0, 100) {
                             warn!(
                                 a_name = cur_name.to_string(),
                                 "An error was thrown while attempting to add A DNS names for container: {:?}",
@@ -354,7 +358,7 @@ impl Server {
                 }
                 match record_handlers.entry((RecordType::AAAA, cur_name.clone())) {
                     Entry::Occupied(mut occupied_entry) => {
-                        if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone()) {
+                        if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone(), 0, 100) {
                             warn!(
                                 aaaa_name = cur_name.to_string(),
                                 "An error was thrown while attempting to add AAAA DNS names for container: {:?}",

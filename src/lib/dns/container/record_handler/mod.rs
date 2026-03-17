@@ -98,7 +98,7 @@ fn address_in_allowed_networks(config: &Settings, ip_addr: &IpAddr) -> bool {
 }
 
 pub trait RecordHandler {
-    fn add_container(&mut self, container: Rc<dyn Container>) -> Result<(), Error>;
+    fn add_container(&mut self, container: Rc<dyn Container>, priority: u16, weight: u16) -> Result<(), Error>;
     fn lookup_object(&self) -> RecordHandlerLookupObject;
 }
 
@@ -109,6 +109,7 @@ pub struct SrvRecordHandler {
     all_containers: Vec<Rc<dyn Container>>,
     host_fqdn_hostname: OsString,
     config: Settings,
+    load_map: HashMap<u32, (u16, u16)>,
     lookup_object: RecordHandlerLookupObject,
 }
 
@@ -120,6 +121,7 @@ impl SrvRecordHandler {
         containers: Vec<Rc<dyn Container>>,
         all_containers: Vec<Rc<dyn Container>>,
         host_fqdn_hostname: OsString,
+        load_map: HashMap<u32, (u16, u16)>,
     ) -> Self {
         Self {
             names,
@@ -128,22 +130,22 @@ impl SrvRecordHandler {
             all_containers,
             config,
             host_fqdn_hostname,
+            load_map,
             lookup_object: RecordHandlerLookupObject::default(),
         }
     }
 
-    fn sort_containers(&mut self) {
-        self.containers.sort_by_key(|a| a.pid());
-    }
-
     pub fn update_records(&mut self) -> Result<(), Error> {
-        self.sort_containers();
         let mut containers = self.containers.clone();
-        containers.shuffle(&mut rng());
+        containers.sort_by(|a, b| {
+            let (pa, _) = self.load_map.get(&a.pid()).copied().unwrap_or((u16::MAX, 100));
+            let (pb, _) = self.load_map.get(&b.pid()).copied().unwrap_or((u16::MAX, 100));
+            pa.cmp(&pb).then(a.pid().cmp(&b.pid()))
+        });
         let mut records: Vec<Record> = vec![];
         let mut indexed_names: HashSet<LowerName> = HashSet::new();
 
-        for (priority, cur_proc) in (0_u16..).zip(containers.iter()) {
+        for cur_proc in containers.iter() {
             let indexed_name = get_container_indexed_name(
                 cur_proc.clone(),
                 &self.all_containers,
@@ -151,7 +153,8 @@ impl SrvRecordHandler {
             )?;
             indexed_names.insert(indexed_name.clone());
 
-            let srv = SRV::new(priority, 100, self.service.port, indexed_name.into());
+            let (priority, weight) = self.load_map.get(&cur_proc.pid()).copied().unwrap_or((0, 100));
+            let srv = SRV::new(priority, weight, self.service.port, indexed_name.into());
             for cur_name in &self.names {
                 records.push(Record::from_rdata(
                     cur_name.into(),
@@ -258,7 +261,8 @@ impl SrvRecordHandler {
 }
 
 impl RecordHandler for SrvRecordHandler {
-    fn add_container(&mut self, container: Rc<dyn Container>) -> Result<(), Error> {
+    fn add_container(&mut self, container: Rc<dyn Container>, priority: u16, weight: u16) -> Result<(), Error> {
+        self.load_map.insert(container.pid(), (priority, weight));
         self.containers.push(container);
         self.update_records()
     }
@@ -363,7 +367,7 @@ impl ARecordHandler {
 }
 
 impl RecordHandler for ARecordHandler {
-    fn add_container(&mut self, container: Rc<dyn Container>) -> Result<(), Error> {
+    fn add_container(&mut self, container: Rc<dyn Container>, _priority: u16, _weight: u16) -> Result<(), Error> {
         self.containers.push(container);
         self.update_records()
     }
@@ -478,7 +482,7 @@ impl ZoneRecordHandler {
 }
 
 impl RecordHandler for ZoneRecordHandler {
-    fn add_container(&mut self, _container: Rc<dyn Container>) -> Result<(), Error> {
+    fn add_container(&mut self, _container: Rc<dyn Container>, _priority: u16, _weight: u16) -> Result<(), Error> {
         Ok(())
     }
 

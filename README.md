@@ -11,6 +11,7 @@ As much as possible, we rely on native Linux constructs to discover the properti
 - Container IP addresses are enumerated by entering each container's **network namespace**.
 - Listening ports are discovered from `/proc/<pid>/net/tcp` rather than querying a runtime.
 - Service names are resolved by entering each container's **mount namespace** and reading its `/etc/services`.
+- Container load is measured by entering each container's **mount namespace** and reading `/proc/loadavg`, which reflects the load of the container's PID namespace since kernel 4.14.
 
 ## DNS Records
 
@@ -42,18 +43,18 @@ For each port matched to a service name in `/etc/services` (including aliases):
 
 | Record | Name | Value |
 |--------|------|-------|
-| `SRV` | `_<service>._<proto>.<container-hostname>.<host-fqdn>.` | Priority, weight 100, port, `<index>.<container-hostname>.<host-fqdn>.` |
+| `SRV` | `_<service>._<proto>.<container-hostname>.<host-fqdn>.` | Priority, weight, port, `<index>.<container-hostname>.<host-fqdn>.` |
 
-When multiple containers expose the same service under the same hostname, all appear as SRV targets with incrementing priorities, shuffled per refresh cycle to distribute load.
+Priority and weight are both derived from each container's 1-minute load average, read from `/proc/loadavg` inside the container's namespace:
 
-**Example** — host `node1.internal`, container with hostname `redis`, PID 1234, listening on port 6379:
+- **Priority**: containers are ranked by load ascending — the least-loaded container gets priority 0 (highest preference per RFC 2782). Useful for selecting the best container on the same host.
+- **Weight**: `clamp(100 / (1 + load_avg), 1, 100)` — an absolute scalar so values are comparable across hosts.
+
+**Example** — host `node1.internal`, two containers both named `redis`, one idle (load 0.0) and one busy (load 2.0):
 
 ```
-node1.internal.               NS    container-ns.node1.internal.
-container-ns.node1.internal.  A     10.0.1.1
-redis.node1.internal.         A     10.0.1.5
-0.redis.node1.internal.       A     10.0.1.5
 _redis._tcp.redis.node1.internal.  SRV  0 100 6379 0.redis.node1.internal.
+_redis._tcp.redis.node1.internal.  SRV  1  33 6379 1.redis.node1.internal.
 ```
 
 ## Configuration

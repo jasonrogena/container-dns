@@ -12,7 +12,7 @@ struct Cli {
     #[clap(short, long, default_value = "info")]
     log_level: LogLevel,
     /// Path to the configuration file to use
-    #[clap(required = true)]
+    #[clap(short, long, default_value = "/etc/container-dns/config.toml")]
     config_path: String,
     #[clap(subcommand)]
     command: Commands,

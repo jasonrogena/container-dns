@@ -89,17 +89,22 @@ nanos = 0
 ## Usage
 
 ```
-container-dns [OPTIONS] <CONFIG_PATH> <COMMAND>
+container-dns [OPTIONS] <COMMAND>
 
 Options:
-  -l, --log-level <LEVEL>  error | warn | info | debug | trace  [default: info]
+  -c, --config-path <PATH>  Path to the configuration file  [default: /etc/container-dns/config.toml]
+  -l, --log-level <LEVEL>   error | warn | info | debug | trace  [default: info]
 
 Commands:
   serve   Start the DNS server
 ```
 
 ```sh
-container-dns /etc/container-dns/config.toml serve
+# Using the default config path
+container-dns serve
+
+# Specifying a custom config path
+container-dns --config-path /path/to/config.toml serve
 ```
 
 Must run as a user with permission to read `/proc/<pid>/ns/*` for all processes (typically root).
@@ -110,9 +115,6 @@ Caddy can use SRV records published by container-dns to dynamically route traffi
 
 ```caddy
 *.apps.example.com {
-    tls {
-        dns cloudflare <cloudflare-api-token>
-    }
     reverse_proxy {
         dynamic multi {
             srv _default_http._tcp.{labels.3}.<host-fqdn> {

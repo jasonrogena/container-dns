@@ -112,22 +112,7 @@ Must run as a user with permission to read `/proc/<pid>/ns/*` for all processes 
 
 ### Service Discovery with Caddy
 
-Caddy can use SRV records published by container-dns to dynamically route traffic to containers. The `dynamic srv` upstream resolver queries container-dns for the service matching the incoming hostname and proxies to whatever containers are currently registered.
-
-```caddy
-*.apps.example.com {
-    reverse_proxy {
-        dynamic multi {
-            srv _default_http._tcp.{labels.3}.<host-fqdn> {
-                refresh 15s
-                grace_period 2m
-            }
-        }
-    }
-}
-```
-
-`{labels.3}` extracts the subdomain from the incoming request (e.g., `myapp` from `myapp.apps.example.com`) and uses it as the container hostname to look up in container-dns. When container-dns runs on multiple hosts, Caddy can be pointed at each host's instance — SRV weight values are comparable across hosts, so Caddy will naturally prefer the least-loaded container regardless of which host it is on:
+Caddy can use SRV records published by container-dns to dynamically route traffic to containers across multiple hosts. Each `srv` block queries a different host's container-dns zone; Caddy merges the results and selects upstreams according to SRV priority and weight, which reflect the real-time load of each container. `{labels.3}` extracts the subdomain from the incoming request (e.g., `myapp` from `myapp.apps.example.com`) and uses it as the container hostname.
 
 ```caddy
 *.apps.example.com {
@@ -145,8 +130,6 @@ Caddy can use SRV records published by container-dns to dynamically route traffi
     }
 }
 ```
-
-Each `srv` block queries a different host's container-dns zone. Caddy merges the results and selects upstreams according to SRV priority and weight, which reflect the real-time load of each container.
 
 For this to work, each container must declare its service in `/etc/services` with the `default_http` alias so that container-dns publishes the right SRV record. For example, two containers — `home-assistant` and `nextcloud` — would each have an entry like this in their own `/etc/services`:
 

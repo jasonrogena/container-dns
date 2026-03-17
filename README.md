@@ -12,11 +12,11 @@ As much as possible, we rely on native Linux constructs to discover the properti
 - Listening ports are discovered from `/proc/<pid>/net/tcp` rather than querying a runtime.
 - Service names are resolved by entering each container's **mount namespace** and reading its `/etc/services`.
 
-## DNS records
+## DNS Records
 
 container-dns exposes the following DNS records for the host, containers, and services running in the containers:
 
-### Per host
+### Per Host
 
 | Record | Name | Value |
 |--------|------|-------|
@@ -25,7 +25,7 @@ container-dns exposes the following DNS records for the host, containers, and se
 
 The zone served is the host's own FQDN, so no external delegation is needed beyond pointing a zone at this server.
 
-### Per container
+### Per Container
 
 Where `<index>` is the container's position among containers sharing the same hostname, ordered by PID (starting at 0).
 
@@ -36,7 +36,7 @@ Where `<index>` is the container's position among containers sharing the same ho
 | `A` | `<index>.<container-hostname>.<host-fqdn>.` | Container's IPv4 addresses |
 | `AAAA` | `<index>.<container-hostname>.<host-fqdn>.` | Container's IPv6 addresses |
 
-### Per service
+### Per Service
 
 For each port matched to a service name in `/etc/services` (including aliases):
 
@@ -109,7 +109,7 @@ container-dns --config-path /path/to/config.toml serve
 
 Must run as a user with permission to read `/proc/<pid>/ns/*` for all processes (typically root).
 
-### Service discovery with Caddy
+### Service Discovery with Caddy
 
 Caddy can use SRV records published by container-dns to dynamically route traffic to containers. The `dynamic srv` upstream resolver queries container-dns for the service matching the incoming hostname and proxies to whatever containers are currently registered.
 

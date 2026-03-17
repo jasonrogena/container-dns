@@ -16,6 +16,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, debug, error, info, instrument, span, warn};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     containers::{Host, IpAddrType, linux::Linux},
@@ -45,7 +46,7 @@ pub enum Error {
     RecordHandler(#[from] record_handler::Error),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub bind_ip_addr: IpAddr,
     pub listen_port: u16,

@@ -13,6 +13,7 @@ path = "src/lib/mod.rs"
 
 [dependencies]
 async-trait = "0.1.89"
+clap = { version = "4.5.53", features = ["derive"] }
 hickory-proto = "0.25.2"
 hickory-resolver = "0.25.2"
 hickory-server = "0.25.2"
@@ -23,6 +24,7 @@ serde_json = "1.0.145"
 thiserror = "2.0.16"
 tokio = "1.47.1"
 tokio-util = "0.7.16"
+toml = "0.9.10"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
 

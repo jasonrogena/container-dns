@@ -1,8 +1,9 @@
 use std::{collections::HashSet, time::Duration};
 
 use ipnet::IpNet;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecordTtls {
     pub(crate) srv: Duration,
     pub(crate) a: Duration,

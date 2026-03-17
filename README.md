@@ -127,7 +127,26 @@ Caddy can use SRV records published by container-dns to dynamically route traffi
 }
 ```
 
-`{labels.3}` extracts the subdomain from the incoming request (e.g., `myapp` from `myapp.apps.example.com`) and uses it as the container hostname to look up in container-dns. The `resolvers` directive (commented out above) can be used to point Caddy directly at container-dns if it is not the system resolver.
+`{labels.3}` extracts the subdomain from the incoming request (e.g., `myapp` from `myapp.apps.example.com`) and uses it as the container hostname to look up in container-dns. When container-dns runs on multiple hosts, Caddy can be pointed at each host's instance — SRV weight values are comparable across hosts, so Caddy will naturally prefer the least-loaded container regardless of which host it is on:
+
+```caddy
+*.apps.example.com {
+    reverse_proxy {
+        dynamic multi {
+            srv _default_http._tcp.{labels.3}.<host1-fqdn> {
+                refresh 15s
+                grace_period 2m
+            }
+            srv _default_http._tcp.{labels.3}.<host2-fqdn> {
+                refresh 15s
+                grace_period 2m
+            }
+        }
+    }
+}
+```
+
+Each `srv` block queries a different host's container-dns zone. Caddy merges the results and selects upstreams according to SRV priority and weight, which reflect the real-time load of each container.
 
 For this to work, each container must declare its service in `/etc/services` with the `default_http` alias so that container-dns publishes the right SRV record. For example, two containers — `home-assistant` and `nextcloud` — would each have an entry like this in their own `/etc/services`:
 
@@ -141,12 +160,20 @@ nextcloud    80/tcp    default_http
 
 container-dns reads each container's `/etc/services` independently via its mount namespace, so the alias can be assigned to any port without conflict between containers.
 
-For Caddy to resolve container-dns names without the `resolvers` override, configure systemd-resolved to forward queries for the host's zone to container-dns (`/etc/systemd/resolved.conf.d/container-dns.conf`):
+For Caddy to resolve container-dns names, configure systemd-resolved on the Caddy host to forward queries for each container host's zone to the corresponding container-dns instance. Create one drop-in file per host (`/etc/systemd/resolved.conf.d/<host>.conf`):
 
 ```ini
+# Queries for <host1-fqdn> forwarded to host1's container-dns
 [Resolve]
-DNS=<container-dns-ip>:<port>
-Domains=~<host-fqdn>
+DNS=<host1-container-dns-ip>:<port>
+Domains=~<host1-fqdn>
 ```
 
-The `~` prefix makes this a routing-only rule — only names under `<host-fqdn>` are forwarded to container-dns; all other queries go to the default resolver.
+```ini
+# Queries for <host2-fqdn> forwarded to host2's container-dns
+[Resolve]
+DNS=<host2-container-dns-ip>:<port>
+Domains=~<host2-fqdn>
+```
+
+The `~` prefix makes each entry a routing-only rule — only names under the specified FQDN are forwarded to that host's container-dns; all other queries go to the default resolver.

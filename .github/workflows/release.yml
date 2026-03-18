@@ -22,14 +22,8 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Format check
-        run: cargo fmt --all -- --check
-
       - name: Test
-        run: cargo test
+        run: make test
 
   build:
     name: Build (${{ matrix.target }})
@@ -58,7 +52,7 @@ jobs:
           tool: cross
 
       - name: Build
-        run: cross build --release --target ${{ matrix.target }}
+        run: make release TARGET=${{ matrix.target }}
 
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/container-dns ${{ matrix.asset_name }}

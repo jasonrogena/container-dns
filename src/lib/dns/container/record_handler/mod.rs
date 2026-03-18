@@ -88,7 +88,7 @@ fn get_container_indexed_name(
 }
 
 fn address_in_allowed_networks(config: &Settings, ip_addr: &IpAddr) -> bool {
-    for cur_network in &config.allowed_networks {
+    for cur_network in &config.allowed_record_networks {
         if cur_network.contains(ip_addr) {
             return true;
         }

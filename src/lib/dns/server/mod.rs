@@ -52,7 +52,8 @@ pub struct ServerConfig {
     pub bind_ip_addr: IpAddr,
     pub listen_port: u16,
     pub refresh_interval: Duration,
-    pub allowed_networks: Vec<IpNet>,
+    pub allowed_record_networks: Vec<IpNet>,
+    pub allowed_query_networks: Vec<IpNet>,
     pub record_ttls: RecordTtls,
     pub tcp_timeout: Duration,
     pub max_ongoing_requests: usize,
@@ -76,7 +77,7 @@ impl Server {
         let config_clone = config.clone();
         let settings = Settings {
             record_ttls: config.record_ttls,
-            allowed_networks: config.allowed_networks.clone().into_iter().collect(),
+            allowed_record_networks: config.allowed_record_networks.clone().into_iter().collect(),
             refresh_interval: config.refresh_interval,
         };
 
@@ -91,7 +92,7 @@ impl Server {
             let mut hickory_server = hickory_server::server::ServerFuture::with_access(
                 catalog,
                 &[],
-                &config_clone.allowed_networks,
+                &config_clone.allowed_query_networks,
             );
 
             let socket_addr = match config.bind_ip_addr {

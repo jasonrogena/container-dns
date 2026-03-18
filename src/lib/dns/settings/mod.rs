@@ -23,6 +23,6 @@ impl Default for RecordTtls {
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub(crate) record_ttls: RecordTtls,
-    pub(crate) allowed_networks: HashSet<IpNet>,
+    pub(crate) allowed_record_networks: HashSet<IpNet>,
     pub(crate) refresh_interval: Duration,
 }

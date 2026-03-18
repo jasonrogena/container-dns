@@ -63,7 +63,8 @@ _redis._tcp.redis.node1.internal.  SRV  1  33 6379 1.redis.node1.internal.
 [dns_server]
 bind_ip_addr = "0.0.0.0"
 listen_port = 5353
-allowed_networks = ["10.0.0.0/8", "192.168.0.0/16"]
+allowed_record_networks = ["10.0.0.0/8", "192.168.0.0/16"]
+allowed_query_networks = ["10.0.0.0/8", "192.168.0.0/16"]
 max_ongoing_requests = 100
 
 [dns_server.refresh_interval]

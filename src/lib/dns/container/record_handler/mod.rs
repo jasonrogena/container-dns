@@ -210,6 +210,15 @@ impl SrvRecordHandler {
                     }
                 }
             }
+            for cur_bound_socket in container.listening_udp_socket_addresses(&cur_addr)? {
+                if let Some(services) =
+                    all_services.get(&(TransportProtocol::Udp, cur_bound_socket.port()))
+                {
+                    for cur_service in services {
+                        active_network_services.insert(cur_service.clone());
+                    }
+                }
+            }
         }
 
         Ok(active_network_services)

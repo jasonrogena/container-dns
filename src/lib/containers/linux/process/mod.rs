@@ -1,7 +1,7 @@
 use libc::pid_t;
 use nix::errno;
 use nix::unistd::gethostname;
-use procfs::net::TcpNetEntry;
+use procfs::net::{TcpNetEntry, UdpNetEntry};
 use servicefile::parse_servicefile;
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -65,40 +65,38 @@ impl LinuxProcess {
         .map_err(|e| Error::DetailedHostname(e.to_string()))
     }
 
-    #[instrument]
-    fn is_ip_addr_listening(address: &IpAddr, tcp_net_entry: &TcpNetEntry) -> Result<bool, Error> {
-        if tcp_net_entry.remote_address.port() != 0 {
-            // Only entries in /proc/<pid>/net/tcp with the remote port set to 0
-            // match sockets that are listening
+    fn is_socket_bound(
+        address: &IpAddr,
+        local_address: SocketAddr,
+        remote_address: SocketAddr,
+    ) -> Result<bool, Error> {
+        if remote_address.port() != 0 {
+            // Only entries with the remote port set to 0 match unconnected (bound) sockets
             return Ok(false);
         }
 
         // Check value of /proc/sys/net/ipv6/bindv6only. If set to 0, dual stack is enabled and
-        // listening on wildcard ipv6 address also means it is listening on ipv4 address
+        // binding on wildcard ipv6 address also covers ipv4 addresses
         let dualstack =
             Ctl::new("net.ipv6.bindv6only")?.value()? == CtlValue::String("0".to_string());
 
         if address.is_ipv4() {
-            if tcp_net_entry.local_address.is_ipv4() {
-                if tcp_net_entry.local_address.ip() != Ipv4Addr::UNSPECIFIED
-                    && tcp_net_entry.local_address.ip() != *address
-                {
+            if local_address.is_ipv4() {
+                if local_address.ip() != Ipv4Addr::UNSPECIFIED && local_address.ip() != *address {
                     return Ok(false);
                 }
-            } else if tcp_net_entry.local_address.is_ipv6() {
-                if !dualstack || tcp_net_entry.local_address.ip() != Ipv6Addr::UNSPECIFIED {
+            } else if local_address.is_ipv6() {
+                if !dualstack || local_address.ip() != Ipv6Addr::UNSPECIFIED {
                     return Ok(false);
                 }
             } else {
                 return Ok(false);
             }
         } else if address.is_ipv6() {
-            if tcp_net_entry.local_address.is_ipv4() {
+            if local_address.is_ipv4() {
                 return Ok(false);
-            } else if tcp_net_entry.local_address.is_ipv6() {
-                if tcp_net_entry.local_address.ip() != Ipv6Addr::UNSPECIFIED
-                    && tcp_net_entry.local_address.ip() != *address
-                {
+            } else if local_address.is_ipv6() {
+                if local_address.ip() != Ipv6Addr::UNSPECIFIED && local_address.ip() != *address {
                     return Ok(false);
                 }
             } else {
@@ -109,6 +107,24 @@ impl LinuxProcess {
         }
 
         Ok(true)
+    }
+
+    #[instrument]
+    fn is_ip_addr_listening(address: &IpAddr, tcp_net_entry: &TcpNetEntry) -> Result<bool, Error> {
+        Self::is_socket_bound(
+            address,
+            tcp_net_entry.local_address,
+            tcp_net_entry.remote_address,
+        )
+    }
+
+    #[instrument]
+    fn is_udp_addr_bound(address: &IpAddr, udp_net_entry: &UdpNetEntry) -> Result<bool, Error> {
+        Self::is_socket_bound(
+            address,
+            udp_net_entry.local_address,
+            udp_net_entry.remote_address,
+        )
     }
 }
 
@@ -203,6 +219,51 @@ impl Container for LinuxProcess {
         debug!(
             pid = self.pid,
             "The number of listening TCP services in container are {}",
+            sock_addr.len()
+        );
+
+        Ok(sock_addr.into_values().collect())
+    }
+
+    #[instrument]
+    fn listening_udp_socket_addresses(
+        &self,
+        address: &IpAddr,
+    ) -> Result<HashSet<SocketAddr>, containers::Error> {
+        let proc_process = procfs::process::Process::new(self.pid)
+            .map_err(|e| containers::Error::Generic(e.to_string()))?;
+        let mut sock_addr: HashMap<u16, SocketAddr> = HashMap::new();
+        let mut udp_entries = proc_process
+            .udp()
+            .map_err(|e| containers::Error::Generic(e.to_string()))?;
+        udp_entries.extend(
+            proc_process
+                .udp6()
+                .map_err(|e| containers::Error::Generic(e.to_string()))?,
+        );
+
+        for cur_entry in udp_entries {
+            if Self::is_udp_addr_bound(address, &cur_entry)
+                .map_err(|e| containers::Error::Generic(e.to_string()))?
+            {
+                match sock_addr.entry(cur_entry.local_address.port()) {
+                    Entry::Vacant(v) => {
+                        v.insert(cur_entry.local_address);
+                    }
+                    Entry::Occupied(mut o) => {
+                        if cur_entry.local_address.ip() == Ipv6Addr::UNSPECIFIED
+                            || (cur_entry.local_address.ip() == Ipv4Addr::UNSPECIFIED
+                                && o.get().ip() != Ipv6Addr::UNSPECIFIED)
+                        {
+                            o.insert(cur_entry.local_address);
+                        }
+                    }
+                }
+            }
+        }
+        debug!(
+            pid = self.pid,
+            "The number of bound UDP services in container are {}",
             sock_addr.len()
         );
 

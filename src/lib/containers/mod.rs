@@ -66,6 +66,13 @@ pub trait Container {
         &self,
         address: &IpAddr,
     ) -> Result<HashSet<SocketAddr>, Error>;
+    fn listening_udp_socket_addresses(
+        &self,
+        address: &IpAddr,
+    ) -> Result<HashSet<SocketAddr>, Error> {
+        let _ = address;
+        Ok(HashSet::new())
+    }
     fn network_services(&self) -> Result<HashSet<NetworkService>, Error>;
     fn pid(&self) -> u32;
     /// Returns the 1-minute load average as seen inside the container's PID namespace,

@@ -158,7 +158,7 @@ impl SrvRecordHandler {
         let mut records: Vec<Record> = vec![];
         let mut indexed_names: HashSet<LowerName> = HashSet::new();
 
-        for cur_proc in containers.iter() {
+        for (priority, cur_proc) in containers.iter().enumerate() {
             let indexed_name = get_container_indexed_name(
                 cur_proc.clone(),
                 &self.all_containers,
@@ -166,12 +166,17 @@ impl SrvRecordHandler {
             )?;
             indexed_names.insert(indexed_name.clone());
 
-            let (priority, weight) = self
+            let (_, weight) = self
                 .load_map
                 .get(&cur_proc.pid())
                 .copied()
                 .unwrap_or((0, 100));
-            let srv = SRV::new(priority, weight, self.service.port, indexed_name.into());
+            let srv = SRV::new(
+                priority as u16,
+                weight,
+                self.service.port,
+                indexed_name.into(),
+            );
             for cur_name in &self.names {
                 records.push(Record::from_rdata(
                     cur_name.into(),

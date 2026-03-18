@@ -1,6 +1,7 @@
 use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     rc::Rc,
+    time::Duration,
 };
 
 use super::*;
@@ -264,4 +265,106 @@ fn test_get_listening_services_includes_udp() {
             .any(|s| s.name == "dns" && s.protocol == TransportProtocol::Udp)
     );
     assert!(!services.iter().any(|s| s.name == "http"));
+}
+
+fn make_settings() -> Settings {
+    Settings {
+        record_ttls: crate::dns::settings::RecordTtls::default(),
+        allowed_record_networks: HashSet::new(),
+        refresh_interval: Duration::from_secs(30),
+    }
+}
+
+fn srv_priorities(handler: &SrvRecordHandler) -> Vec<u16> {
+    let lookup = handler.lookup_object();
+    let mut priorities: Vec<u16> = lookup
+        .iter()
+        .filter_map(|r| {
+            if let hickory_proto::rr::RData::SRV(srv) = r.data() {
+                Some(srv.priority())
+            } else {
+                None
+            }
+        })
+        .collect();
+    priorities.sort();
+    priorities.dedup();
+    priorities
+}
+
+#[test]
+fn test_srv_priority_single_container_is_always_zero() {
+    let host_fqdn: OsString = "test-host".into();
+    let service = NetworkService {
+        name: "http".into(),
+        aliases: vec![],
+        port: 8080,
+        protocol: TransportProtocol::Tcp,
+    };
+    let container = Rc::new(TestOkContainer {
+        pid: 100,
+        ..TestOkContainer::default()
+    });
+    let names =
+        SrvRecordHandler::get_service_names(&service, container.clone(), &host_fqdn).unwrap();
+
+    // Simulate the container having host-wide rank 14 (14 other less-loaded containers on host)
+    let mut load_map = HashMap::new();
+    load_map.insert(100u32, (14u16, 88u16));
+
+    let mut handler = SrvRecordHandler::new(
+        names,
+        service,
+        make_settings(),
+        vec![container.clone()],
+        vec![container],
+        host_fqdn,
+        load_map,
+    );
+    handler.update_records().unwrap();
+
+    assert_eq!(srv_priorities(&handler), vec![0]);
+}
+
+#[test]
+fn test_srv_priority_two_containers_get_zero_and_one() {
+    let host_fqdn: OsString = "test-host".into();
+    let service = NetworkService {
+        name: "http".into(),
+        aliases: vec![],
+        port: 8080,
+        protocol: TransportProtocol::Tcp,
+    };
+    // Two containers with the same hostname; pid 200 has lower host-wide rank (lower load)
+    let container_a = Rc::new(TestOkContainer {
+        pid: 100,
+        hostname: "grafana".into(),
+        ..TestOkContainer::default()
+    });
+    let container_b = Rc::new(TestOkContainer {
+        pid: 200,
+        hostname: "grafana".into(),
+        ..TestOkContainer::default()
+    });
+    let all: Vec<Rc<dyn Container>> = vec![container_a.clone(), container_b.clone()];
+    let names =
+        SrvRecordHandler::get_service_names(&service, container_a.clone(), &host_fqdn).unwrap();
+
+    // pid 200 ranked 5th host-wide (lower load), pid 100 ranked 14th (higher load)
+    let mut load_map = HashMap::new();
+    load_map.insert(100u32, (14u16, 70u16));
+    load_map.insert(200u32, (5u16, 90u16));
+
+    let mut handler = SrvRecordHandler::new(
+        names,
+        service,
+        make_settings(),
+        vec![container_a, container_b],
+        all,
+        host_fqdn,
+        load_map,
+    );
+    handler.update_records().unwrap();
+
+    assert_eq!(srv_priorities(&handler), vec![0, 1]);
 }

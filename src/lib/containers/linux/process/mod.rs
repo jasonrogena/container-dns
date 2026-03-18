@@ -110,7 +110,7 @@ impl LinuxProcess {
     }
 
     #[instrument]
-    fn is_ip_addr_listening(address: &IpAddr, tcp_net_entry: &TcpNetEntry) -> Result<bool, Error> {
+    fn is_tcp_addr_bound(address: &IpAddr, tcp_net_entry: &TcpNetEntry) -> Result<bool, Error> {
         Self::is_socket_bound(
             address,
             tcp_net_entry.local_address,
@@ -196,7 +196,7 @@ impl Container for LinuxProcess {
         );
 
         for cur_entry in tcp_entries {
-            if Self::is_ip_addr_listening(address, &cur_entry)
+            if Self::is_tcp_addr_bound(address, &cur_entry)
                 .map_err(|e| containers::Error::Generic(e.to_string()))?
             {
                 match sock_addr.entry(cur_entry.local_address.port()) {

@@ -10,10 +10,11 @@ clean:
 	git clean -x -f tests/tmp
 	cargo clean
 
-test: dependencies
+test: dependencies build
 	cargo clippy --all-targets --all-features -- -D warnings -D unused_imports
 	cargo fmt --all -- --check
 	cargo test
+	sudo python3 tests/e2e.py
 
 coverage: dependencies
 	rustup component add llvm-tools-preview

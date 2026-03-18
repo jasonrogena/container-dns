@@ -1,0 +1,13 @@
+[dns_server]
+bind_ip_addr = "127.0.0.1"
+listen_port = {listen_port}
+refresh_interval = { secs = 0, nanos = 50000000 }
+allowed_record_networks = ["0.0.0.0/0"]
+allowed_query_networks = ["0.0.0.0/0", "::/0"]
+tcp_timeout = { secs = 5, nanos = 0 }
+max_ongoing_requests = 10
+
+[dns_server.record_ttls]
+srv = { secs = 60, nanos = 0 }
+a   = { secs = 60, nanos = 0 }
+ns  = { secs = 3600, nanos = 0 }

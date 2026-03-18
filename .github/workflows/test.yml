@@ -21,5 +21,11 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install e2e dependencies
+        run: sudo apt-get install -y dnsutils
+
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
       - name: Test
         run: make test

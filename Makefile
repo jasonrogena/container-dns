@@ -11,7 +11,7 @@ clean:
 	cargo clean
 
 test: dependencies
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --all-targets --all-features -- -D warnings -D unused_imports
 	cargo fmt --all -- --check
 	cargo test
 

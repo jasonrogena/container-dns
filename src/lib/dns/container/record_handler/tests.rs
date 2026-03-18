@@ -77,6 +77,7 @@ impl Container for TestOkContainer {
     }
 }
 
+#[allow(dead_code)]
 struct TestErrContainer {}
 
 impl Container for TestErrContainer {
@@ -150,6 +151,7 @@ impl Host for TestOkHost {
     }
 }
 
+#[allow(dead_code)]
 struct TestErrHost {}
 
 impl Host for TestErrHost {
@@ -256,8 +258,10 @@ fn test_get_listening_services_includes_udp() {
 
     let services = SrvRecordHandler::get_listening_services(Rc::new(container)).unwrap();
 
-    assert!(services
-        .iter()
-        .any(|s| s.name == "dns" && s.protocol == TransportProtocol::Udp));
+    assert!(
+        services
+            .iter()
+            .any(|s| s.name == "dns" && s.protocol == TransportProtocol::Udp)
+    );
     assert!(!services.iter().any(|s| s.name == "http"));
 }

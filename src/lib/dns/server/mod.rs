@@ -1,6 +1,7 @@
 use hickory_proto::rr::{LowerName, RecordType};
 use hickory_server::authority::{AuthorityObject, Catalog};
 use ipnet::IpNet;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
     env::consts,
@@ -16,7 +17,6 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{Level, debug, error, info, instrument, span, warn};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     containers::{Host, IpAddrType, linux::Linux},
@@ -278,9 +278,13 @@ impl Server {
                 for cur_name in srv_names {
                     match record_handlers.entry((RecordType::SRV, cur_name.clone())) {
                         Entry::Occupied(mut occupied_entry) => {
-                            let (priority, weight) = load_map.get(&cur_proc.pid()).copied().unwrap_or((0, 100));
-                            if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone(), priority, weight)
-                            {
+                            let (priority, weight) =
+                                load_map.get(&cur_proc.pid()).copied().unwrap_or((0, 100));
+                            if let Err(e) = occupied_entry.get_mut().add_container(
+                                cur_proc.clone(),
+                                priority,
+                                weight,
+                            ) {
                                 warn!(
                                     service = cur_service.to_string(),
                                     service_name = cur_name.to_string(),
@@ -331,7 +335,11 @@ impl Server {
             for cur_name in a_names {
                 match record_handlers.entry((RecordType::A, cur_name.clone())) {
                     Entry::Occupied(mut occupied_entry) => {
-                        if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone(), 0, 100) {
+                        if let Err(e) =
+                            occupied_entry
+                                .get_mut()
+                                .add_container(cur_proc.clone(), 0, 100)
+                        {
                             warn!(
                                 a_name = cur_name.to_string(),
                                 "An error was thrown while attempting to add A DNS names for container: {:?}",
@@ -358,7 +366,11 @@ impl Server {
                 }
                 match record_handlers.entry((RecordType::AAAA, cur_name.clone())) {
                     Entry::Occupied(mut occupied_entry) => {
-                        if let Err(e) = occupied_entry.get_mut().add_container(cur_proc.clone(), 0, 100) {
+                        if let Err(e) =
+                            occupied_entry
+                                .get_mut()
+                                .add_container(cur_proc.clone(), 0, 100)
+                        {
                             warn!(
                                 aaaa_name = cur_name.to_string(),
                                 "An error was thrown while attempting to add AAAA DNS names for container: {:?}",

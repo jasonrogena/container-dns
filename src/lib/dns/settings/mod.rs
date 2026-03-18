@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct RecordTtls {
     pub(crate) srv: Duration,
     pub(crate) a: Duration,
+    pub(crate) aaaa: Duration,
     pub(crate) ns: Duration,
 }
 
@@ -15,6 +16,7 @@ impl Default for RecordTtls {
         Self {
             srv: Duration::from_secs(60),
             a: Duration::from_secs(60),
+            aaaa: Duration::from_secs(60),
             ns: Duration::from_secs(3600),
         }
     }

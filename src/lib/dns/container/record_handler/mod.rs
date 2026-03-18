@@ -345,25 +345,24 @@ impl ARecordHandler {
                     continue;
                 }
 
-                let rdata = match cur_ip {
+                let (rdata, ttl) = match cur_ip {
                     IpAddr::V4(ipv4_addr) => {
                         let a: A = ipv4_addr.into();
-                        a.into_rdata()
+                        (a.into_rdata(), self.config.record_ttls.a.as_secs() as u32)
                     }
                     IpAddr::V6(ipv6_addr) => {
                         let aaaa: AAAA = ipv6_addr.into();
-                        aaaa.into_rdata()
+                        (
+                            aaaa.into_rdata(),
+                            self.config.record_ttls.aaaa.as_secs() as u32,
+                        )
                     }
                 };
 
                 for cur_name in &self.names {
                     records.insert(
                         (cur_ip, cur_name.clone()),
-                        Record::from_rdata(
-                            cur_name.clone().into(),
-                            self.config.record_ttls.a.as_secs() as u32,
-                            rdata.clone(),
-                        ),
+                        Record::from_rdata(cur_name.clone().into(), ttl, rdata.clone()),
                     );
                 }
             }
@@ -490,22 +489,18 @@ impl ZoneRecordHandler {
                 continue;
             }
 
-            let rdata = match cur_ip {
+            let (rdata, ttl) = match cur_ip {
                 IpAddr::V4(ipv4_addr) => {
                     let a: A = ipv4_addr.into();
-                    a.into_rdata()
+                    (a.into_rdata(), config.record_ttls.a.as_secs() as u32)
                 }
                 IpAddr::V6(ipv6_addr) => {
                     let aaaa: AAAA = ipv6_addr.into();
-                    aaaa.into_rdata()
+                    (aaaa.into_rdata(), config.record_ttls.aaaa.as_secs() as u32)
                 }
             };
 
-            records.push(Record::from_rdata(
-                target_name.clone(),
-                config.record_ttls.a.as_secs() as u32,
-                rdata.clone(),
-            ));
+            records.push(Record::from_rdata(target_name.clone(), ttl, rdata.clone()));
         }
 
         Ok(records)

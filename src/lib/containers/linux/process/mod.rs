@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use sysctl::{Ctl, CtlValue, Sysctl, SysctlError};
-use tracing::{debug, error, instrument, trace, warn};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::containers::linux::{get_ip_addresses, run_in_namespace};
 use crate::containers::{self, Container, IpAddrType, NetworkService};

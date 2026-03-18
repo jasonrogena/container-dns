@@ -1,8 +1,7 @@
+use crate::dns::server::ServerConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
-use crate::dns::server::{ServerConfig};
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

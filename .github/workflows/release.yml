@@ -9,8 +9,12 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
   build:
     name: Build (${{ matrix.target }})
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -35,7 +39,7 @@ jobs:
           tool: cross
 
       - name: Build
-        run: cross build --release --target ${{ matrix.target }}
+        run: make release TARGET=${{ matrix.target }}
 
       - name: Rename binary
         run: cp target/${{ matrix.target }}/release/container-dns ${{ matrix.asset_name }}

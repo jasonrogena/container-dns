@@ -98,7 +98,12 @@ fn address_in_allowed_networks(config: &Settings, ip_addr: &IpAddr) -> bool {
 }
 
 pub trait RecordHandler {
-    fn add_container(&mut self, container: Rc<dyn Container>, priority: u16, weight: u16) -> Result<(), Error>;
+    fn add_container(
+        &mut self,
+        container: Rc<dyn Container>,
+        priority: u16,
+        weight: u16,
+    ) -> Result<(), Error>;
     fn lookup_object(&self) -> RecordHandlerLookupObject;
 }
 
@@ -138,8 +143,16 @@ impl SrvRecordHandler {
     pub fn update_records(&mut self) -> Result<(), Error> {
         let mut containers = self.containers.clone();
         containers.sort_by(|a, b| {
-            let (pa, _) = self.load_map.get(&a.pid()).copied().unwrap_or((u16::MAX, 100));
-            let (pb, _) = self.load_map.get(&b.pid()).copied().unwrap_or((u16::MAX, 100));
+            let (pa, _) = self
+                .load_map
+                .get(&a.pid())
+                .copied()
+                .unwrap_or((u16::MAX, 100));
+            let (pb, _) = self
+                .load_map
+                .get(&b.pid())
+                .copied()
+                .unwrap_or((u16::MAX, 100));
             pa.cmp(&pb).then(a.pid().cmp(&b.pid()))
         });
         let mut records: Vec<Record> = vec![];
@@ -153,7 +166,11 @@ impl SrvRecordHandler {
             )?;
             indexed_names.insert(indexed_name.clone());
 
-            let (priority, weight) = self.load_map.get(&cur_proc.pid()).copied().unwrap_or((0, 100));
+            let (priority, weight) = self
+                .load_map
+                .get(&cur_proc.pid())
+                .copied()
+                .unwrap_or((0, 100));
             let srv = SRV::new(priority, weight, self.service.port, indexed_name.into());
             for cur_name in &self.names {
                 records.push(Record::from_rdata(
@@ -204,6 +221,15 @@ impl SrvRecordHandler {
             for cur_listening_socket in container.listening_tcp_socket_addresses(&cur_addr)? {
                 if let Some(services) =
                     all_services.get(&(TransportProtocol::Tcp, cur_listening_socket.port()))
+                {
+                    for cur_service in services {
+                        active_network_services.insert(cur_service.clone());
+                    }
+                }
+            }
+            for cur_bound_socket in container.listening_udp_socket_addresses(&cur_addr)? {
+                if let Some(services) =
+                    all_services.get(&(TransportProtocol::Udp, cur_bound_socket.port()))
                 {
                     for cur_service in services {
                         active_network_services.insert(cur_service.clone());
@@ -261,7 +287,12 @@ impl SrvRecordHandler {
 }
 
 impl RecordHandler for SrvRecordHandler {
-    fn add_container(&mut self, container: Rc<dyn Container>, priority: u16, weight: u16) -> Result<(), Error> {
+    fn add_container(
+        &mut self,
+        container: Rc<dyn Container>,
+        priority: u16,
+        weight: u16,
+    ) -> Result<(), Error> {
         self.load_map.insert(container.pid(), (priority, weight));
         self.containers.push(container);
         self.update_records()
@@ -367,7 +398,12 @@ impl ARecordHandler {
 }
 
 impl RecordHandler for ARecordHandler {
-    fn add_container(&mut self, container: Rc<dyn Container>, _priority: u16, _weight: u16) -> Result<(), Error> {
+    fn add_container(
+        &mut self,
+        container: Rc<dyn Container>,
+        _priority: u16,
+        _weight: u16,
+    ) -> Result<(), Error> {
         self.containers.push(container);
         self.update_records()
     }
@@ -482,7 +518,12 @@ impl ZoneRecordHandler {
 }
 
 impl RecordHandler for ZoneRecordHandler {
-    fn add_container(&mut self, _container: Rc<dyn Container>, _priority: u16, _weight: u16) -> Result<(), Error> {
+    fn add_container(
+        &mut self,
+        _container: Rc<dyn Container>,
+        _priority: u16,
+        _weight: u16,
+    ) -> Result<(), Error> {
         Ok(())
     }
 

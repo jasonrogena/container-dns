@@ -66,26 +66,13 @@ listen_port = 5353
 allowed_record_networks = ["10.0.0.0/8", "192.168.0.0/16"]
 allowed_query_networks = ["10.0.0.0/8", "192.168.0.0/16"]
 max_ongoing_requests = 100
+tcp_timeout = { secs = 5, nanos = 0 }
+refresh_interval = { secs = 30, nanos = 0 }
 
-[dns_server.refresh_interval]
-secs = 30
-nanos = 0
-
-[dns_server.tcp_timeout]
-secs = 5
-nanos = 0
-
-[dns_server.record_ttls.srv]
-secs = 60
-nanos = 0
-
-[dns_server.record_ttls.a]
-secs = 60
-nanos = 0
-
-[dns_server.record_ttls.ns]
-secs = 3600
-nanos = 0
+[dns_server.record_ttls]
+srv = { secs = 60, nanos = 0 }
+a = { secs = 60, nanos = 0 }
+ns = { secs = 3600, nanos = 0 }
 ```
 
 ## Usage

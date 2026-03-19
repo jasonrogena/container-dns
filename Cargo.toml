@@ -13,6 +13,9 @@ path = "src/lib/mod.rs"
 
 [dependencies]
 async-trait = "0.1.89"
+opentelemetry = { version = "0.27", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.27", features = ["metrics", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["metrics", "grpc-tonic"] }
 clap = { version = "4.5.53", features = ["derive"] }
 hickory-proto = "0.25.2"
 hickory-resolver = "0.25.2"

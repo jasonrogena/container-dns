@@ -68,6 +68,8 @@ allowed_query_networks = ["10.0.0.0/8", "192.168.0.0/16"]
 max_ongoing_requests = 100
 tcp_timeout = { secs = 5, nanos = 0 }
 refresh_interval = { secs = 30, nanos = 0 }
+# Optional: export metrics via OTLP gRPC. Omit to disable metric export.
+otlp_endpoint = "http://localhost:4317"
 
 [dns_server.record_ttls]
 srv = { secs = 60, nanos = 0 }
@@ -75,6 +77,19 @@ a = { secs = 60, nanos = 0 }
 aaaa = { secs = 60, nanos = 0 }
 ns = { secs = 3600, nanos = 0 }
 ```
+
+### Metrics
+
+When `otlp_endpoint` is configured, the following metrics are exported via OTLP gRPC:
+
+| Metric | Type | Description |
+|---|---|---|
+| `dns_zone_size` | Gauge | Number of unique (record type, name) pairs in the DNS zone after each refresh |
+| `dns_zone_refresh_duration_seconds` | Histogram | Duration of each zone refresh in seconds |
+| `dns_query_duration_seconds` | Histogram | Duration of each DNS query in seconds |
+| `dns_queries_total{status="success"}` | Counter | Total successful DNS queries |
+| `dns_queries_total{status="failure"}` | Counter | Total failed DNS queries |
+
 
 ## Usage
 

@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::time;
+
 use hickory_proto::{
     op::ResponseCode,
     rr::{LowerName, RecordType},
@@ -12,9 +15,12 @@ use hickory_server::{
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, instrument};
 
-use crate::dns::container::{
-    record_handler::{self},
-    store::{self, StoreQueryRequest, StoreRequest, StoreResponse},
+use crate::{
+    dns::container::{
+        record_handler::{self},
+        store::{self, StoreQueryRequest, StoreRequest, StoreResponse},
+    },
+    metrics::Metrics,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -43,10 +49,15 @@ pub enum Error {
 pub struct Authority {
     zone_name: LowerName,
     store_request_tx: mpsc::Sender<StoreRequest>,
+    metrics: Arc<Metrics>,
 }
 
 impl Authority {
-    pub fn new(zone_name: LowerName, store_request_tx: mpsc::Sender<StoreRequest>) -> Self {
+    pub fn new(
+        zone_name: LowerName,
+        store_request_tx: mpsc::Sender<StoreRequest>,
+        metrics: Arc<Metrics>,
+    ) -> Self {
         info!(
             zone = zone_name.to_string(),
             "Initializing the container authority"
@@ -55,6 +66,7 @@ impl Authority {
         Self {
             zone_name,
             store_request_tx,
+            metrics,
         }
     }
 
@@ -109,9 +121,16 @@ impl AuthorityObject for Authority {
         info!("lookup() called");
         match rtype {
             RecordType::A | RecordType::AAAA | RecordType::SRV | RecordType::NS => {
+                let start = time::Instant::now();
                 match self.send_request(name.clone(), rtype).await {
-                    Ok(ok) => LookupControlFlow::Break(Ok(ok)),
+                    Ok(ok) => {
+                        self.metrics
+                            .record_query_success(start.elapsed().as_secs_f64());
+                        LookupControlFlow::Break(Ok(ok))
+                    }
                     Err(e) => {
+                        self.metrics
+                            .record_query_failure(start.elapsed().as_secs_f64());
                         error!(
                             "An error was thrown while trying to query a DNS record. Sending back an empty response to the resolver: {:?}",
                             e

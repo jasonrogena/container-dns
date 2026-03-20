@@ -1,6 +1,8 @@
 use hickory_proto::rr::{LowerName, RecordType};
 use hickory_server::authority::{AuthorityObject, Catalog};
 use ipnet::IpNet;
+use opentelemetry::global;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
@@ -31,6 +33,7 @@ use crate::{
         },
         settings::{RecordTtls, Settings},
     },
+    metrics::{self as metrics_mod, Metrics},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +48,8 @@ pub enum Error {
     Authority(#[from] authority::Error),
     #[error("An error thrown by a record handler: {0}")]
     RecordHandler(#[from] record_handler::Error),
+    #[error("An error occurred while setting up metrics: {0}")]
+    Metrics(#[from] metrics_mod::Error),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -57,12 +62,19 @@ pub struct ServerConfig {
     pub record_ttls: RecordTtls,
     pub tcp_timeout: Duration,
     pub max_ongoing_requests: usize,
+    /// OTLP gRPC endpoint for exporting metrics (e.g. "http://localhost:4317").
+    /// If not set, metrics are not exported.
+    pub otlp_endpoint: Option<String>,
 }
 
 pub struct Server {
     shutdown_token: CancellationToken,
     store_request_tx: mpsc::Sender<StoreRequest>,
     settings: Settings,
+    metrics: Arc<Metrics>,
+    // Held to keep the meter provider (and its export loop) alive for the
+    // lifetime of the server.
+    _meter_provider: Option<SdkMeterProvider>,
 }
 
 impl Server {
@@ -81,8 +93,20 @@ impl Server {
             refresh_interval: config.refresh_interval,
         };
 
+        let meter_provider = match &config.otlp_endpoint {
+            Some(endpoint) => {
+                let provider = metrics_mod::init_otlp(endpoint)?;
+                global::set_meter_provider(provider.clone());
+                Some(provider)
+            }
+            None => None,
+        };
+        let meter = global::meter("container-dns");
+        let metrics = Arc::new(Metrics::new(&meter));
+
         let mut catalog = Catalog::new();
-        let container_authority = Authority::new(zone_name.clone(), store_request_tx.clone());
+        let container_authority =
+            Authority::new(zone_name.clone(), store_request_tx.clone(), metrics.clone());
         catalog.upsert(
             container_authority.origin().clone(),
             vec![Arc::new(container_authority)],
@@ -143,28 +167,37 @@ impl Server {
             shutdown_token,
             store_request_tx,
             settings,
+            metrics,
+            _meter_provider: meter_provider,
         })
     }
 
     pub async fn start(&self, local_set: LocalSet) {
         let mut refresh_interval = tokio::time::interval(self.settings.refresh_interval);
         let settings = self.settings.clone();
-        local_set.run_until(async move {
-            if let Ok(host) = Self::get_host() {
-                loop {
-                    if let Some(lookup_objects) = Self::get_updated_lookup_objects(host.clone(), settings.clone()) {
-                        let req = StoreRequest::UPDATE(StoreUpdateRequest { lookup_objects });
-                        if let Err(e) = self.store_request_tx.send(req).await {
-                            error!(
-                                "An error occurred sending an update message to the store: {:?}",
-                                e
-                            );
+        let metrics = self.metrics.clone();
+        local_set
+            .run_until(async move {
+                if let Ok(host) = Self::get_host() {
+                    loop {
+                        if let Some(lookup_objects) = Self::get_updated_lookup_objects(
+                            host.clone(),
+                            settings.clone(),
+                            &metrics,
+                        ) {
+                            let req = StoreRequest::UPDATE(StoreUpdateRequest { lookup_objects });
+                            if let Err(e) = self.store_request_tx.send(req).await {
+                                error!(
+                                    "An error occurred sending an update message to the store: {:?}",
+                                    e
+                                );
+                            }
                         }
+                        refresh_interval.tick().await;
                     }
-                    refresh_interval.tick().await;
                 }
-            }
-        }).await;
+            })
+            .await;
     }
 
     fn get_host() -> Result<Rc<dyn Host>, Error> {
@@ -186,10 +219,11 @@ impl Server {
         Ok(ZoneRecordHandler::get_zone_name(host.clone())?)
     }
 
-    #[instrument]
+    #[instrument(skip(metrics))]
     fn get_updated_lookup_objects(
         host: Rc<dyn Host>,
         settings: Settings,
+        metrics: &Metrics,
     ) -> Option<RecordHandlerLookupObjects> {
         info!("Started container discovery");
         let zone_name = match Self::get_zone_name(host.clone()) {
@@ -399,12 +433,17 @@ impl Server {
             }
         }
 
-        let lookup_objects = record_handlers
+        let lookup_objects: RecordHandlerLookupObjects = record_handlers
             .into_iter()
             .map(|(k, v)| (k, v.lookup_object()))
             .collect();
 
-        info!("Finished in {:?}", timing.elapsed());
+        let elapsed = timing.elapsed();
+        info!("Finished in {:?}", elapsed);
+        metrics
+            .zone_refresh_duration
+            .record(elapsed.as_secs_f64(), &[]);
+        metrics.zone_size.record(lookup_objects.len() as u64, &[]);
 
         Some(lookup_objects)
     }

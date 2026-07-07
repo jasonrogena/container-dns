@@ -378,12 +378,14 @@ where
     result
 }
 
-#[derive(Default, Debug)]
-pub struct Linux {}
+#[derive(Debug)]
+pub struct Linux {
+    domain: String,
+}
 
 impl Linux {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(domain: String) -> Self {
+        Self { domain }
     }
 
     fn get_namespaced_processes(
@@ -441,7 +443,12 @@ impl Host for Linux {
     #[instrument]
     fn fqdn_hostname(&self) -> Result<OsString, containers::Error> {
         let hostname = gethostname().map_err(|e| containers::Error::Generic(e.to_string()))?;
-        Ok(format!("{}.cybertron.lan.", hostname.to_string_lossy()).into())
+        Ok(format!(
+            "{}.{}.",
+            hostname.to_string_lossy(),
+            self.domain.trim_end_matches('.')
+        )
+        .into())
     }
 
     #[instrument]

@@ -9,6 +9,16 @@ pub struct RecordTtls {
     pub(crate) a: Duration,
     pub(crate) aaaa: Duration,
     pub(crate) ns: Duration,
+    // `ptr` and `txt` carry serde defaults so that config files written before
+    // DNS-SD browse/metadata support still parse.
+    #[serde(default = "default_ptr_txt_ttl")]
+    pub(crate) ptr: Duration,
+    #[serde(default = "default_ptr_txt_ttl")]
+    pub(crate) txt: Duration,
+}
+
+fn default_ptr_txt_ttl() -> Duration {
+    Duration::from_secs(60)
 }
 
 impl Default for RecordTtls {
@@ -18,6 +28,8 @@ impl Default for RecordTtls {
             a: Duration::from_secs(60),
             aaaa: Duration::from_secs(60),
             ns: Duration::from_secs(3600),
+            ptr: default_ptr_txt_ttl(),
+            txt: default_ptr_txt_ttl(),
         }
     }
 }

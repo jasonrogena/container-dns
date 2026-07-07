@@ -1,4 +1,4 @@
-use hickory_proto::rr::{LowerName, RecordType};
+use hickory_proto::rr::{LowerName, Record, RecordType};
 use hickory_server::authority::{AuthorityObject, Catalog};
 use ipnet::IpNet;
 use opentelemetry::global;
@@ -27,7 +27,8 @@ use crate::{
             authority::{self, Authority},
             load,
             record_handler::{
-                self, ARecordHandler, RecordHandler, SrvRecordHandler, ZoneRecordHandler,
+                self, ARecordHandler, RecordHandler, RecordHandlerLookupObject, SrvRecordHandler,
+                ZoneRecordHandler,
             },
             store::{RecordHandlerLookupObjects, Store, StoreRequest, StoreUpdateRequest},
         },
@@ -65,12 +66,22 @@ pub struct ServerConfig {
     /// OTLP gRPC endpoint for exporting metrics (e.g. "http://localhost:4317").
     /// If not set, metrics are not exported.
     pub otlp_endpoint: Option<String>,
+    /// DNS domain appended to this host's hostname to form its FQDN and the zone
+    /// this server is authoritative for (e.g. "cybertron.lan" yields the host FQDN
+    /// "<hostname>.cybertron.lan"). No trailing dot needed. Defaults to "local".
+    #[serde(default = "default_domain")]
+    pub domain: String,
+}
+
+fn default_domain() -> String {
+    "local".to_string()
 }
 
 pub struct Server {
     shutdown_token: CancellationToken,
     store_request_tx: mpsc::Sender<StoreRequest>,
     settings: Settings,
+    domain: String,
     metrics: Arc<Metrics>,
     // Held to keep the meter provider (and its export loop) alive for the
     // lifetime of the server.
@@ -83,7 +94,8 @@ impl Server {
 
         let (store_request_tx, store_request_rx) =
             mpsc::channel::<StoreRequest>(config.max_ongoing_requests);
-        let host = Self::get_host()?;
+        let domain = config.domain.clone();
+        let host = Self::get_host(&domain)?;
         let zone_name = Self::get_zone_name(host.clone())?;
         let shutdown_token = CancellationToken::new();
         let config_clone = config.clone();
@@ -167,6 +179,7 @@ impl Server {
             shutdown_token,
             store_request_tx,
             settings,
+            domain,
             metrics,
             _meter_provider: meter_provider,
         })
@@ -176,9 +189,10 @@ impl Server {
         let mut refresh_interval = tokio::time::interval(self.settings.refresh_interval);
         let settings = self.settings.clone();
         let metrics = self.metrics.clone();
+        let domain = self.domain.clone();
         local_set
             .run_until(async move {
-                if let Ok(host) = Self::get_host() {
+                if let Ok(host) = Self::get_host(&domain) {
                     loop {
                         if let Some(lookup_objects) = Self::get_updated_lookup_objects(
                             host.clone(),
@@ -200,9 +214,9 @@ impl Server {
             .await;
     }
 
-    fn get_host() -> Result<Rc<dyn Host>, Error> {
+    fn get_host(domain: &str) -> Result<Rc<dyn Host>, Error> {
         let host: Rc<dyn Host> = match consts::OS {
-            "linux" => Rc::new(Linux::new()),
+            "linux" => Rc::new(Linux::new(domain.to_string())),
             unsupported_os => return Err(Error::UnsupportedOs(unsupported_os.to_string())),
         };
 
@@ -271,6 +285,16 @@ impl Server {
             }
         };
         let load_map = load::priorities_and_weights(&containers);
+
+        // DNS-SD browse state, accumulated across all containers and materialised
+        // into PTR/TXT records after the container loop.
+        //   ptr_targets:   service-type (browse) name -> set of instance names
+        //   service_types: every service-type name, for the _services._dns-sd._udp meta PTR
+        //   txt_data:      instance name -> per-replica (pid, TXT values) for reconciliation
+        let mut ptr_targets: HashMap<LowerName, HashSet<LowerName>> = HashMap::new();
+        let mut service_types: HashSet<LowerName> = HashSet::new();
+        let mut txt_data: HashMap<LowerName, Vec<(u32, Vec<String>)>> = HashMap::new();
+
         for (container_index, cur_proc) in containers.iter().enumerate() {
             let span = span!(
                 Level::INFO,
@@ -294,8 +318,22 @@ impl Server {
                 "Current process has {} listening services",
                 listening_services.len()
             );
+
+            // Read the container's DNS-SD TXT metadata once (mount-namespace file
+            // read), then match it to each service by (protocol, port) endpoint.
+            let container_metadata = match cur_proc.metadata() {
+                Ok(m) => m,
+                Err(e) => {
+                    warn!(
+                        "An error was thrown while trying to read container metadata. Defaulting to none: {:?}",
+                        e
+                    );
+                    vec![]
+                }
+            };
+
             for cur_service in listening_services {
-                let srv_names = match SrvRecordHandler::get_service_names(
+                let srv_and_type_names = match SrvRecordHandler::get_service_and_type_names(
                     &cur_service,
                     cur_proc.clone(),
                     &host_fqdn_hostname,
@@ -310,8 +348,15 @@ impl Server {
                         HashSet::new()
                     }
                 };
-                for cur_name in srv_names {
-                    match record_handlers.entry((RecordType::SRV, cur_name.clone())) {
+
+                // TXT values for this endpoint, if the container declared any.
+                let service_metadata = container_metadata
+                    .iter()
+                    .find(|m| m.protocol == cur_service.protocol && m.port == cur_service.port)
+                    .map(|m| m.values.clone());
+
+                for (instance_name, service_type_name) in srv_and_type_names {
+                    match record_handlers.entry((RecordType::SRV, instance_name.clone())) {
                         Entry::Occupied(mut occupied_entry) => {
                             let (priority, weight) =
                                 load_map.get(&cur_proc.pid()).copied().unwrap_or((0, 100));
@@ -322,7 +367,7 @@ impl Server {
                             ) {
                                 warn!(
                                     service = cur_service.to_string(),
-                                    service_name = cur_name.to_string(),
+                                    service_name = instance_name.to_string(),
                                     "An error was thrown while attempting to append SRV DNS names for container: {:?}",
                                     e
                                 );
@@ -330,7 +375,7 @@ impl Server {
                         }
                         Entry::Vacant(vacant_entry) => {
                             let mut handler = SrvRecordHandler::new(
-                                HashSet::from([cur_name.clone()]),
+                                HashSet::from([instance_name.clone()]),
                                 cur_service.clone(),
                                 settings.clone(),
                                 vec![cur_proc.clone()],
@@ -341,13 +386,27 @@ impl Server {
                             if let Err(e) = handler.update_records() {
                                 warn!(
                                     service = cur_service.to_string(),
-                                    service_name = cur_name.to_string(),
+                                    service_name = instance_name.to_string(),
                                     "An error was thrown while attempting to create SRV DNS names for container: {:?}",
                                     e
                                 );
                             }
                             vacant_entry.insert(Box::new(handler));
                         }
+                    }
+
+                    // DNS-SD browse: the service type points to this instance, and
+                    // the instance's TXT collects each replica's declared values.
+                    ptr_targets
+                        .entry(service_type_name.clone())
+                        .or_default()
+                        .insert(instance_name.clone());
+                    service_types.insert(service_type_name);
+                    if let Some(values) = &service_metadata {
+                        txt_data
+                            .entry(instance_name)
+                            .or_default()
+                            .push((cur_proc.pid(), values.clone()));
                     }
                 }
             }
@@ -433,10 +492,67 @@ impl Server {
             }
         }
 
-        let lookup_objects: RecordHandlerLookupObjects = record_handlers
+        let mut lookup_objects: RecordHandlerLookupObjects = record_handlers
             .into_iter()
             .map(|(k, v)| (k, v.lookup_object()))
             .collect();
+
+        // DNS-SD browse PTR records: one RRset per service type, pointing at each
+        // instance (replicas already collapsed into a single instance name).
+        let ptr_ttl = settings.record_ttls.ptr.as_secs() as u32;
+        for (service_type_name, instances) in ptr_targets {
+            let records: Vec<Record> = instances
+                .iter()
+                .map(|instance| record_handler::ptr_record(&service_type_name, instance, ptr_ttl))
+                .collect();
+            lookup_objects.insert(
+                (RecordType::PTR, service_type_name),
+                RecordHandlerLookupObject::new(records, None),
+            );
+        }
+
+        // DNS-SD service-type enumeration: _services._dns-sd._udp.<fqdn> -> every type.
+        if !service_types.is_empty() {
+            match record_handler::dns_sd_services_name(&host_fqdn_hostname) {
+                Ok(meta_name) => {
+                    let records: Vec<Record> = service_types
+                        .iter()
+                        .map(|service_type| {
+                            record_handler::ptr_record(&meta_name, service_type, ptr_ttl)
+                        })
+                        .collect();
+                    lookup_objects.insert(
+                        (RecordType::PTR, meta_name),
+                        RecordHandlerLookupObject::new(records, None),
+                    );
+                }
+                Err(e) => warn!(
+                    "Could not build the DNS-SD service enumeration name; skipping the meta PTR: {:?}",
+                    e
+                ),
+            }
+        }
+
+        // TXT records: one RRset per instance. When replicas disagree, the lowest
+        // PID (stable, unlike load-derived SRV priority) wins and we warn.
+        let txt_ttl = settings.record_ttls.txt.as_secs() as u32;
+        for (instance_name, mut entries) in txt_data {
+            entries.sort_by_key(|(pid, _)| *pid);
+            let Some((_, winner)) = entries.first().cloned() else {
+                continue;
+            };
+            if entries.iter().any(|(_, values)| *values != winner) {
+                warn!(
+                    instance = instance_name.to_string(),
+                    "container-dns TXT metadata diverges across replicas; using the lowest-PID container's values"
+                );
+            }
+            let record = record_handler::txt_record(&instance_name, winner, txt_ttl);
+            lookup_objects.insert(
+                (RecordType::TXT, instance_name),
+                RecordHandlerLookupObject::new(vec![record], None),
+            );
+        }
 
         let elapsed = timing.elapsed();
         info!("Finished in {:?}", elapsed);

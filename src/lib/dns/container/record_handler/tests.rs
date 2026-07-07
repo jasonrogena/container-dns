@@ -186,10 +186,10 @@ fn test_srv_get_service_names() {
     .unwrap();
 
     let expected_names: HashSet<LowerName> = vec![
-        Name::from_ascii("_test-service._tcp.test-container.test-host")
+        Name::from_ascii("test-container._test-service._tcp.test-host")
             .unwrap()
             .into(),
-        Name::from_ascii("_alias1._tcp.test-container.test-host")
+        Name::from_ascii("test-container._alias1._tcp.test-host")
             .unwrap()
             .into(),
     ]
@@ -197,6 +197,92 @@ fn test_srv_get_service_names() {
     .collect();
 
     assert_eq!(service_names, expected_names);
+}
+
+#[test]
+fn test_get_service_and_type_names_pairs_instance_and_browse() {
+    let test_host = TestOkHost::default();
+    let service = NetworkService {
+        name: "test-service".to_string(),
+        aliases: vec!["alias1".to_string()],
+        port: 8080,
+        protocol: TransportProtocol::Tcp,
+    };
+    let pairs = SrvRecordHandler::get_service_and_type_names(
+        &service,
+        Rc::new(TestOkContainer::default()),
+        &test_host.fqdn_hostname,
+    )
+    .unwrap();
+
+    let expected: HashSet<(LowerName, LowerName)> = vec![
+        (
+            Name::from_ascii("test-container._test-service._tcp.test-host")
+                .unwrap()
+                .into(),
+            Name::from_ascii("_test-service._tcp.test-host")
+                .unwrap()
+                .into(),
+        ),
+        (
+            Name::from_ascii("test-container._alias1._tcp.test-host")
+                .unwrap()
+                .into(),
+            Name::from_ascii("_alias1._tcp.test-host").unwrap().into(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+
+    assert_eq!(pairs, expected);
+}
+
+#[test]
+fn test_dns_sd_services_name() {
+    let host_fqdn: OsString = "test-host".into();
+    let name = dns_sd_services_name(&host_fqdn).unwrap();
+    let expected: LowerName = Name::from_ascii("_services._dns-sd._udp.test-host")
+        .unwrap()
+        .into();
+    assert_eq!(name, expected);
+}
+
+#[test]
+fn test_ptr_and_txt_record_builders() {
+    let owner: LowerName = Name::from_ascii("_http._tcp.test-host").unwrap().into();
+    let target: LowerName = Name::from_ascii("_http._tcp.grafana.test-host")
+        .unwrap()
+        .into();
+
+    let ptr = ptr_record(&owner, &target, 60);
+    match ptr.data() {
+        hickory_proto::rr::RData::PTR(p) => {
+            assert_eq!(
+                p.0,
+                Name::from_ascii("_http._tcp.grafana.test-host").unwrap()
+            )
+        }
+        other => panic!("expected PTR, got {:?}", other),
+    }
+
+    let txt = txt_record(
+        &target,
+        vec!["txtvers=1".to_string(), "path=/x".to_string()],
+        60,
+    );
+    match txt.data() {
+        hickory_proto::rr::RData::TXT(t) => {
+            let strings: Vec<String> = t
+                .iter()
+                .map(|b| String::from_utf8_lossy(b).into_owned())
+                .collect();
+            assert_eq!(
+                strings,
+                vec!["txtvers=1".to_string(), "path=/x".to_string()]
+            );
+        }
+        other => panic!("expected TXT, got {:?}", other),
+    }
 }
 
 #[test]
@@ -216,10 +302,10 @@ fn test_srv_get_service_names_udp() {
     .unwrap();
 
     let expected_names: HashSet<LowerName> = vec![
-        Name::from_ascii("_dns._udp.test-container.test-host")
+        Name::from_ascii("test-container._dns._udp.test-host")
             .unwrap()
             .into(),
-        Name::from_ascii("_domain._udp.test-container.test-host")
+        Name::from_ascii("test-container._domain._udp.test-host")
             .unwrap()
             .into(),
     ]

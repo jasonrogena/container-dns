@@ -7,7 +7,7 @@ use std::{
 
 use hickory_proto::rr::{
     LowerName, Record, RecordData,
-    rdata::{A, AAAA, NS, SRV},
+    rdata::{A, AAAA, NS, PTR, SRV, TXT},
 };
 use hickory_resolver::Name;
 use hickory_server::authority::LookupObject;
@@ -95,6 +95,29 @@ fn address_in_allowed_networks(config: &Settings, ip_addr: &IpAddr) -> bool {
     }
 
     false
+}
+
+/// Returns the DNS-SD service-type enumeration name for the host, i.e.
+/// `_services._dns-sd._udp.<host-fqdn>` (RFC 6763 §9). A PTR RRset at this name
+/// lists every service type present in the zone.
+pub fn dns_sd_services_name(host_fqdn_hostname: &OsString) -> Result<LowerName, Error> {
+    let host_fqdn = get_lower_hostname(host_fqdn_hostname.clone())?;
+
+    Ok(host_fqdn
+        .prepend_label("_udp")?
+        .prepend_label("_dns-sd")?
+        .prepend_label("_services")?
+        .into())
+}
+
+/// Builds a PTR record at `owner` pointing to `target`.
+pub fn ptr_record(owner: &LowerName, target: &LowerName, ttl: u32) -> Record {
+    Record::from_rdata(owner.into(), ttl, PTR(target.into()).into_rdata())
+}
+
+/// Builds a TXT record at `owner` from RFC 6763 §6 `key=value` character-strings.
+pub fn txt_record(owner: &LowerName, values: Vec<String>, ttl: u32) -> Record {
+    Record::from_rdata(owner.into(), ttl, TXT::new(values).into_rdata())
 }
 
 pub trait RecordHandler {
@@ -251,28 +274,48 @@ impl SrvRecordHandler {
         container: Rc<dyn Container>,
         host_fqdn_hostname: &OsString,
     ) -> Result<HashSet<LowerName>, Error> {
-        let container_fqdn = get_lower_hostname(container_fqdn_hostname(
-            container.clone(),
-            host_fqdn_hostname,
-        )?)?;
-        let mut names: HashSet<LowerName> = HashSet::new();
+        Ok(
+            Self::get_service_and_type_names(service, container, host_fqdn_hostname)?
+                .into_iter()
+                .map(|(instance, _)| instance)
+                .collect(),
+        )
+    }
+
+    /// Returns the set of `(instance_name, service_type_name)` pairs for a service
+    /// on a container, using DNS-SD (RFC 6763 §4.1) naming.
+    ///
+    /// - The **service-type name** is the DNS-SD browse name (`_<svc>._<proto>.<fqdn>`),
+    ///   used as the PTR owner.
+    /// - The **instance name** is the DNS-SD Service Instance Name — the container
+    ///   hostname prepended to the service type (`<host>._<svc>._<proto>.<fqdn>`) —
+    ///   and is the SRV/TXT owner. Replicas sharing a hostname collapse to the same
+    ///   instance name (Framing 1), so the PTR RRset dedupes naturally.
+    ///
+    /// Both the canonical service name and its aliases yield a pair.
+    pub fn get_service_and_type_names(
+        service: &NetworkService,
+        container: Rc<dyn Container>,
+        host_fqdn_hostname: &OsString,
+    ) -> Result<HashSet<(LowerName, LowerName)>, Error> {
+        let host_fqdn = get_lower_hostname(host_fqdn_hostname.clone())?;
+        let hostname_label = container
+            .hostname()?
+            .into_string()
+            .map_err(|_e| Error::Hostname())?;
 
         let proto_str = match service.protocol {
             TransportProtocol::Tcp => "tcp",
             TransportProtocol::Udp => "udp",
         };
 
-        names.insert(Self::prepend_srv_name_labels(
-            &container_fqdn,
-            proto_str,
-            &service.name,
-        )?);
-        for cur_alias in service.aliases.clone() {
-            names.insert(Self::prepend_srv_name_labels(
-                &container_fqdn,
-                proto_str,
-                &cur_alias,
-            )?);
+        let mut names: HashSet<(LowerName, LowerName)> = HashSet::new();
+        let mut labels = vec![service.name.clone()];
+        labels.extend(service.aliases.clone());
+        for label in labels {
+            let service_type = Self::prepend_srv_name_labels(&host_fqdn, proto_str, &label)?;
+            let instance: LowerName = service_type.prepend_label(hostname_label.clone())?.into();
+            names.insert((instance, service_type));
         }
 
         Ok(names)
@@ -539,7 +582,7 @@ pub struct RecordHandlerLookupObject {
 }
 
 impl RecordHandlerLookupObject {
-    fn new(records: Vec<Record>, additionals: Option<Vec<Record>>) -> Self {
+    pub(crate) fn new(records: Vec<Record>, additionals: Option<Vec<Record>>) -> Self {
         Self {
             records,
             additionals,

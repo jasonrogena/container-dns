@@ -111,12 +111,21 @@ def test_basic_records(binary: str, work: Path, zone: str) -> None:
                 sys.exit(f"FAIL basic_records: timed out waiting for A record {a_name}")
             time.sleep(0.05)
 
+        # DNS-SD Service Instance Names (RFC 6763 §4.1): <instance>._svc._proto.<zone>
         for name in (
-            f"_http._tcp.{hostname}.{zone}.",
-            f"_domain._udp.{hostname}.{zone}.",
+            f"{hostname}._http._tcp.{zone}.",
+            f"{hostname}._domain._udp.{zone}.",
         ):
             if not dns_query(name, "SRV", dns_port):
                 sys.exit(f"FAIL basic_records: no SRV records for {name}")
+
+        # DNS-SD browse (PTR): the service type and the service-type enumeration.
+        for name in (
+            f"_http._tcp.{zone}.",
+            f"_services._dns-sd._udp.{zone}.",
+        ):
+            if not dns_query(name, "PTR", dns_port):
+                sys.exit(f"FAIL basic_records: no PTR records for {name}")
 
         print("PASS: basic_records")
 
@@ -149,7 +158,7 @@ def test_srv_priority_ordering(binary: str, work: Path, zone: str) -> None:
 
         dns_proc, dns_port = start_dns(binary, work)
 
-        srv_name = f"_http._tcp.{hostname}.{zone}."
+        srv_name = f"{hostname}._http._tcp.{zone}."
         deadline = time.monotonic() + 10
         priorities = []
         while len(priorities) < 2:
@@ -179,7 +188,8 @@ def test_srv_priority_ordering(binary: str, work: Path, zone: str) -> None:
 
 def main() -> None:
     binary = sys.argv[1] if len(sys.argv) > 1 else "./target/release/container-dns"
-    zone = f"{socket.gethostname()}.cybertron.lan"
+    # Must match [dns_server].domain in tests/e2e_config.toml.
+    zone = f"{socket.gethostname()}.example.test"
 
     with tempfile.TemporaryDirectory() as work_str:
         work = Path(work_str)

@@ -105,3 +105,61 @@ fn ipv6_addr_ipv4_local_returns_false() {
     let remote = sa4(Ipv4Addr::UNSPECIFIED, 0);
     assert!(!LinuxProcess::is_socket_bound(&addr, local, remote).unwrap());
 }
+
+#[test]
+fn parse_metadata_multiple_endpoints_and_protocols() {
+    let content = "\
+# a comment
+[8080/tcp]
+txtvers=1
+path=/api/health
+expect=200
+
+; another comment
+[3478/udp]
+check=stun-binding
+";
+    let metadata = parse_metadata(content);
+    assert_eq!(metadata.len(), 2);
+
+    let http = metadata
+        .iter()
+        .find(|m| m.protocol == TransportProtocol::Tcp && m.port == 8080)
+        .unwrap();
+    assert_eq!(
+        http.values,
+        vec!["txtvers=1", "path=/api/health", "expect=200"]
+    );
+
+    let stun = metadata
+        .iter()
+        .find(|m| m.protocol == TransportProtocol::Udp && m.port == 3478)
+        .unwrap();
+    assert_eq!(stun.values, vec!["check=stun-binding"]);
+}
+
+#[test]
+fn parse_metadata_skips_malformed_headers_lines_and_orphans() {
+    let content = "\
+orphan=ignored
+[not-an-endpoint]
+key=value
+[9090/sctp]
+key=value
+[9090/tcp]
+valid=yes
+malformed-no-equals
+";
+    let metadata = parse_metadata(content);
+    // Only the well-formed [9090/tcp] section survives.
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].protocol, TransportProtocol::Tcp);
+    assert_eq!(metadata[0].port, 9090);
+    assert_eq!(metadata[0].values, vec!["valid=yes"]);
+}
+
+#[test]
+fn parse_metadata_empty_input_is_empty() {
+    assert!(parse_metadata("").is_empty());
+    assert!(parse_metadata("# only a comment\n\n").is_empty());
+}

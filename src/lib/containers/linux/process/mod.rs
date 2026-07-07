@@ -11,7 +11,82 @@ use sysctl::{Ctl, CtlValue, Sysctl, SysctlError};
 use tracing::{debug, instrument, trace, warn};
 
 use crate::containers::linux::{get_ip_addresses, run_in_namespace};
-use crate::containers::{self, Container, IpAddrType, NetworkService};
+use crate::containers::{
+    self, Container, IpAddrType, NetworkService, ServiceMetadata, TransportProtocol,
+};
+
+/// Path, inside a container's mount namespace, of the file declaring DNS-SD TXT
+/// metadata for the container's endpoints.
+const METADATA_PATH: &str = "/etc/container-dns/txt";
+
+/// Parses the `/etc/container-dns/txt` INI-style file into per-endpoint metadata.
+///
+/// Sections are `[port/proto]` (e.g. `[8080/tcp]`); the lines under a section are
+/// raw RFC 6763 §6 TXT `key=value` character-strings. Blank lines and lines
+/// starting with `#` or `;` are ignored, as are malformed sections/lines.
+fn parse_metadata(content: &str) -> Vec<ServiceMetadata> {
+    let mut out: Vec<ServiceMetadata> = vec![];
+    let mut current: Option<ServiceMetadata> = None;
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+
+        if let Some(header) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            if let Some(done) = current.take() {
+                out.push(done);
+            }
+            current = match parse_endpoint_header(header) {
+                Some((protocol, port)) => Some(ServiceMetadata {
+                    protocol,
+                    port,
+                    values: vec![],
+                }),
+                None => {
+                    warn!(
+                        "Ignoring malformed container-dns metadata section header: [{}]",
+                        header
+                    );
+                    None
+                }
+            };
+            continue;
+        }
+
+        match current.as_mut() {
+            Some(entry) if line.contains('=') => entry.values.push(line.to_string()),
+            Some(_) => warn!(
+                "Ignoring malformed container-dns metadata line (no '='): {}",
+                line
+            ),
+            None => warn!(
+                "Ignoring container-dns metadata line outside any [port/proto] section: {}",
+                line
+            ),
+        }
+    }
+
+    if let Some(done) = current.take() {
+        out.push(done);
+    }
+
+    out
+}
+
+/// Parses a `port/proto` section header (e.g. `8080/tcp`) into its endpoint.
+fn parse_endpoint_header(header: &str) -> Option<(TransportProtocol, u16)> {
+    let (port_str, proto_str) = header.trim().split_once('/')?;
+    let port: u16 = port_str.trim().parse().ok()?;
+    let protocol = match proto_str.trim().to_lowercase().as_str() {
+        "tcp" => TransportProtocol::Tcp,
+        "udp" => TransportProtocol::Udp,
+        _ => return None,
+    };
+
+    Some((protocol, port))
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -301,6 +376,44 @@ impl Container for LinuxProcess {
 
             Ok(services)
         }).map_err(|e| containers::Error::Generic(e.to_string()))
+    }
+
+    #[instrument]
+    fn metadata(&self) -> Result<Vec<ServiceMetadata>, containers::Error> {
+        run_in_namespace(
+            self.pid,
+            super::namespaces::Type::Mount,
+            self.pid,
+            |pid: pid_t| {
+                let content = match std::fs::read_to_string(METADATA_PATH) {
+                    Ok(c) => c,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        trace!(pid = pid, "No {} file present in container", METADATA_PATH);
+                        return Ok(vec![]);
+                    }
+                    Err(e) => {
+                        warn!(
+                            pid = pid,
+                            "Could not read {} for container; returning no metadata: {:?}",
+                            METADATA_PATH,
+                            e
+                        );
+                        return Ok(vec![]);
+                    }
+                };
+
+                let metadata = parse_metadata(&content);
+                debug!(
+                    pid = pid,
+                    "The number of endpoints with metadata in container are {}",
+                    metadata.len()
+                );
+                trace!(pid = pid, "Metadata {:?}", metadata);
+
+                Ok(metadata)
+            },
+        )
+        .map_err(|e| containers::Error::Generic(e.to_string()))
     }
 }
 

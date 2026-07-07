@@ -120,7 +120,12 @@ impl AuthorityObject for Authority {
     ) -> LookupControlFlow<Box<dyn LookupObject>> {
         info!("lookup() called");
         match rtype {
-            RecordType::A | RecordType::AAAA | RecordType::SRV | RecordType::NS => {
+            RecordType::A
+            | RecordType::AAAA
+            | RecordType::SRV
+            | RecordType::NS
+            | RecordType::PTR
+            | RecordType::TXT => {
                 let start = time::Instant::now();
                 match self.send_request(name.clone(), rtype).await {
                     Ok(ok) => {

@@ -53,6 +53,16 @@ pub struct NetworkService {
     pub protocol: TransportProtocol,
 }
 
+/// DNS-SD TXT metadata a container declares about one of its endpoints, read
+/// from `/etc/container-dns/txt` inside the container's mount namespace. `values`
+/// are the raw RFC 6763 §6 `key=value` TXT character-strings, in file order.
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
+pub struct ServiceMetadata {
+    pub protocol: TransportProtocol,
+    pub port: u16,
+    pub values: Vec<String>,
+}
+
 impl Display for NetworkService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} {}/{}", self.name, self.port, self.protocol)
@@ -79,6 +89,12 @@ pub trait Container {
     /// or None if unavailable.
     fn load_average(&self) -> Option<f64> {
         None
+    }
+    /// Returns the DNS-SD TXT metadata declared by the container (in
+    /// `/etc/container-dns/txt`), keyed by (protocol, port) endpoint. Defaults to
+    /// none for containers that don't ship the file.
+    fn metadata(&self) -> Result<Vec<ServiceMetadata>, Error> {
+        Ok(vec![])
     }
 }
 
